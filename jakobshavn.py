@@ -56,7 +56,7 @@ def load_front(smooth=True, km=True, s=0.25):
 
     return front
 
-def load_centerline(smooth=True, km=True, s=0.25):
+def load_centerline(smooth=True, km=True, s=0.25, path=None):
 
     # Scale factor
     if km:
@@ -65,7 +65,8 @@ def load_centerline(smooth=True, km=True, s=0.25):
         scale = 1.0
 
     # Load transects
-    path = '/data0/briel/jakobshavn/velocity/giant2/long_term_analysis/along_flow_points.npy'
+    if path is None:
+        path = '/data0/briel/jakobshavn/velocity/giant2/long_term_analysis/along_flow_points.npy'
     tpts = np.load(path)
     cols, rows, x, y = [tpts[:,j] for j in range(4)]
     x *= scale
@@ -78,7 +79,7 @@ def load_centerline(smooth=True, km=True, s=0.25):
 
     return centerline
 
-def load_extended_centerline(smooth=True, km=True, s=0.25, n=200):
+def load_extended_centerline(smooth=True, km=True, s=0.25, n=200, path=None, tpath=None):
 
     # Scale factor
     if km:
@@ -87,15 +88,17 @@ def load_extended_centerline(smooth=True, km=True, s=0.25, n=200):
         scale = 1.0
 
     # Load transect along glacier
-    path = '/data0/briel/jakobshavn/velocity/giant2/long_term_analysis/along_flow_points.npy'
+    if path is None:
+        path = '/data0/briel/jakobshavn/velocity/giant2/long_term_analysis/along_flow_points.npy'
     tpts = np.load(path)
     cols, rows, x, y = [tpts[:,j] for j in range(4)]
     x *= scale
     y *= scale
 
     # Load transects along ice tongue
-    path = '/home/briel/python/iceutils/aux/jakobshavn_centerline.txt'
-    lon, lat = np.loadtxt(path, unpack=True)
+    if tpath is None:
+        tpath = '/home/briel/python/iceutils/aux/jakobshavn_centerline.txt'
+    lon, lat = np.loadtxt(tpath, unpack=True)
 
     # Convert to polar stereographic
     import pyproj
