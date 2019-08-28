@@ -2,6 +2,7 @@
 
 import numpy as np
 from scipy.interpolate import UnivariateSpline
+from matplotlib.path import Path
 import sys
 
 class Boundary:
@@ -12,6 +13,7 @@ class Boundary:
     def __init__(self, x, y):
         self._x = x
         self._y = y
+        self._init_path()
 
     def truncate(self, x_min=-1.0e16, x_max=1.0e16, y_min=-1.0e16, y_max=1.0e16):
         mask  = (self._x > x_min) * (self._x < x_max)
@@ -21,10 +23,26 @@ class Boundary:
     def mask(self, mask):
         self._x = self._x[mask]
         self._y = self._y[mask]
+        self._init_path()
 
     def scale(self, value):
         self._x *= value
         self._y *= value
+        self._init_path()
+
+    def contains_points(self, x, y):
+        """
+        Check if point resides within boundary.
+        """
+        points = np.column_stack((x, y))
+        flags = self.path.contains_points(points)
+        return flags
+
+    def _init_path(self):
+        """
+        Private function to initialize new Path instance for coordinates.
+        """
+        self.path = Path(np.column_stack((self._x, self._y)))
     
     @property
     def x(self):
@@ -113,5 +131,35 @@ def load_termini_gmt(files, name='Jakobshavn'):
 
     # Done
     return termini
+
+def load_kml(kmlfile):
+    """
+    Convenience function to parse a KML file to get the coordinates.
+    """
+    from pykml import parser
+
+    # Parse the file
+    with open(kmlfile, 'r') as fid:
+        doc = parser.parse(fid)
+
+    # Iterate
+    for child in doc.iter():
+        tag = child.tag.split('}')[-1]
+        if tag == 'coordinates':
+
+            # Get raw data
+            s = child.text.strip()
+            lines = s.split()
+
+            # Loop over coordinates
+            N = len(lines)
+            lon = np.zeros(N)
+            lat = np.zeros(N)
+            for i, line in enumerate(lines):
+                x, y, z = [float(x) for x in line.split(',')]
+                lon[i] = x
+                lat[i] = y
+
+    return lon, lat
 
 # end of file    
