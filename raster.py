@@ -218,7 +218,7 @@ class Raster:
                 d = d[:,jslice]
         return d
 
-    def write_gdal(self, filename, dtype=gdal.GDT_Float32, driver='ENVI', epsg=3413):
+    def write_gdal(self, filename, dtype=gdal.GDT_Float32, driver='ENVI', epsg=None):
         """
         Write data and header to a GDAL raster.
         """
@@ -229,11 +229,12 @@ class Raster:
         ds = driver.Create(filename, xsize=self.hdr.nx, ysize=self.hdr.ny, bands=1, eType=dtype)
 
         # Create geotransform and projection
-        from osgeo import osr
-        ds.SetGeoTransform(self.hdr.geotransform)
-        srs = osr.SpatialReference()
-        srs.SetFromUserInput('EPSG:%d' % epsg)
-        ds.SetProjection(srs.ExportToWkt())
+        if epsg is not None:
+            from osgeo import osr
+            ds.SetGeoTransform(self.hdr.geotransform)
+            srs = osr.SpatialReference()
+            srs.SetFromUserInput('EPSG:%d' % epsg)
+            ds.SetProjection(srs.ExportToWkt())
 
         # Write data
         ds.GetRasterBand(1).WriteArray(self.data)
