@@ -70,7 +70,7 @@ def build_temporal_design_matrix(t, userfile):
 
 def build_seasonal_matrix(t):
 
-    import giant.utilities.timefn as timefn
+    from . import timefn
 
     # If decimal times passed in, convert to dates
     if isinstance(t[0], (float, np.float32)):
@@ -107,7 +107,7 @@ def build_seasonal_matrix(t):
 
 def get_model_component_indices(collection):
 
-    import giant.utilities.timefn as timefn
+    from . import timefn
 
     fnParts = timefn.getFunctionTypes(collection)
     index_dict = {}

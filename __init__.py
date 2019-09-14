@@ -4,9 +4,15 @@
 from .stress import *
 from .raster import *
 from .boundary import *
-from .model import *
 from .timeutils import *
 from .matutils import *
+from . import timefn
+
+# Optional time series model will require pygeodesy
+try:
+    from .model import *
+except ImportError:
+    pass
 
 # Site-dependent modules
 from . import jakobshavn
