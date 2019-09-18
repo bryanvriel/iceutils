@@ -255,6 +255,18 @@ class Raster:
         
         return
 
+    def crop(self, xmin, xmax, ymin, ymax):
+        """
+        Crop a raster by its coordinates.
+        """
+        # Crop header and get mask
+        xmask, ymask = self.hdr.crop(xmin, xmax, ymin, ymax)
+
+        # Crop data
+        self.data = self.data[ymask,:][:,xmask]
+
+        return
+
     def transect(self, point1, point2, n=200, order=3, return_location=False):
         """
         Extract a linear transect given two tuples of (X, Y) coordinates of the
@@ -370,6 +382,29 @@ class RasterInfo:
         self.dy = Y[1,0] - Y[0,0]
         self.ny, self.nx = X.shape
         self.units = units
+
+    def crop(self, xmin, xmax, ymin, ymax):
+        """
+        Crop a header by its geographic coordinates. Rounds to nearest pixel. Returns
+        column/row masks.
+        """
+        # Construct coordinates
+        x = self.xcoords
+        y = self.ycoords
+
+        # Mask
+        xmask = (x >= xmin) * (x <= xmax)
+        ymask = (y >= ymin) * (y <= ymax)
+        x = x[xmask]
+        y = y[ymask]
+
+        # Save new starting coordinates and sizes
+        self.xstart = x[0]
+        self.ystart = y[0]
+        self.nx = len(x)
+        self.ny = len(y)
+
+        return xmask, ymask
 
     def __eq__(self, other):
         """
