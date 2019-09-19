@@ -1,0 +1,248 @@
+#-*- coding: utf-8 -*-
+
+import numpy as np
+import h5py
+import sys
+
+from .raster import RasterInfo
+
+class Stack:
+    """
+    Class that encapsulates standard HDF5 stack file.
+    """
+
+    def __init__(self, filename, mode='r', init=None):
+
+        self.fid = None
+
+        # Store the mode
+        assert mode in ('r', 'r+', 'w', 'a'), 'Unsupported HDF5 file open mode'
+        self.mode = mode
+
+        # Save RasterInfo if file opened in read mode
+        if self.mode in ('r', 'r+', 'a'):
+            self.hdr = RasterInfo(stackfile=filename)
+
+        # Open HDF5 file 
+        self.fid = h5py.File(filename, self.mode)
+
+        # Read time information
+        if self.mode in ('r', 'r+', 'a'):
+            self.tdec = self.fid['tdec'][()]
+
+        # If another stack is provided, copy metadata and save into Datasets
+        if isinstance(init, Stack):
+            self.hdr = init.hdr
+            self.tdec = init.tdec
+            if self.mode in ('r+', 'w', 'a'):
+                self.fid['x'] = self.hdr.xcoords
+                self.fid['y'] = self.hdr.ycoords
+                self.fid['tdec'] = self.tdec
+
+        # Initialize datasets dictionary
+        self._datasets = {}
+        if self.mode in ('r', 'r+', 'a'):
+            for key in self.fid.keys():
+                self._datasets[key] = self.fid[key]
+
+        return
+
+    def __del__(self):
+        """
+        Close HDF5 dataset.
+        """
+        if self.fid is not None:
+            self.fid.close()
+
+    def set_spatial_metadata(self, raster_info):
+        """
+        Set spatial arrays from a RasterInfo object.
+        """
+        X, Y = raster_info.meshgrid()
+        self.x = X[0,:]
+        self.y = Y[:,0]
+        return
+
+    def create_dataset(self, name, shape, dtype='f', chunks=None, **kwargs):
+        """
+        Create an HDF5 dataset for data.
+        """
+        # Create the dataset
+        self._datasets[name] = self.fid.create_dataset(
+            name, shape, dtype, chunks=chunks, **kwargs
+        )
+        # Check if we need to save chunk shape
+        if chunks is not None and 'chunk_shape' not in self.fid.keys() and len(chunks) == 3:
+            self.fid['chunk_shape'] = list(chunks)
+
+        # Return reference to dataset
+        return self._datasets[name]
+
+    def __getitem__(self, name):
+        """
+        Provides access to underlying HDF5 dataset.
+        """
+        return self._datasets[name]
+
+    def __setitem__(self, name, value):
+        """
+        Creates a new dataset.
+        """
+        # Make sure dataset doesn't already exist
+        if name in self._datasets.keys():
+            raise ValueError('Dataset %s already exists' % name)
+
+        # Create dataset automatically
+        assert isinstance(value, np.ndarray), 'Must input NumPy array to set data.'
+        self.create_dataset(name, value.shape, dtype=value.dtype, data=value)
+
+        return
+
+    def slice(self, index, key='igram'):
+        """
+        Extract Stack 2d slice at given time index.
+        """
+        return self._datasets[key][index, :, :]
+
+    def timeseries(self, xy=None, coord=None, key='igram', win_size=1):
+        """
+        Extract time series at a given spatial coordinate. Optionally extract a window of
+        time series and average spatially.
+        """
+        # Get the image coordinate if not provided
+        if xy is not None and coord is None:
+            x, y = xy
+            row, col = self.hdr.xy_to_imagecoord(x, y)
+        elif coord is not None:
+            row, col = coord
+        else:
+            return None
+
+        # Spatial slice
+        if win_size > 1:
+            islice = slice(row - win_size // 2, row + win_size // 2 + 1)
+            jslice = slice(col - win_size // 2, col + win_size // 2 + 1)
+        else:
+            islice, jslice = row, col
+
+        # Extract the data
+        data = self._datasets[key][:, islice, jslice]
+
+        # Average
+        if win_size > 1:
+            data = np.nanmean(data, axis=(1, 2))
+
+        # Done
+        return data
+
+    @property
+    def Nt(self):
+        if self.tdec is not None:
+            return self.tdec.size
+        else:
+            return None
+
+    @property
+    def Ny(self):
+        if self.hdr is not None:
+            return self.hdr.shape[0]
+        else:
+            return None
+
+    @property
+    def Nx(self):
+        if self.hdr is not None:
+            return self.hdr.shape[1]
+        else:
+            return None
+
+
+class MultiStack:
+    """
+    Stack object that represents some arithmetic manipulation of multiple Stacks. Child
+    classes should inherit from this class and implement the self.slice and
+    self.timeseries methods.
+    """
+
+    def __init__(self, stacks=None, files=None):
+        """
+        In the constructor, either store a list of Stack objects or create a list
+        of Stack objects from a list of filenames.
+        """
+        # Store or create list of stacks
+        if stacks is not None:
+            self.stacks = stacks
+        elif files is not None:
+            self.stacks = [Stack(fname) for fname in files]
+        else:
+            raise ValueError('Must pass in stacks or filenames.')
+
+        # Cache time and header objects
+        self.tdec = self.stacks[0].tdec
+        self.hdr = self.stacks[0].hdr
+
+    def slice(self, index, key='igram'):
+        raise NotImplementedError('Child classes must implement slice function')
+
+    def timeseries(self, xy=None, coord=None, key='igram', win_size=1):
+        raise NotImplementedError('Child classes must implement timeseries function')
+
+    @property
+    def Nt(self):
+        if self.tdec is not None:
+            return self.tdec.size
+        else:
+            return None
+
+    @property
+    def Ny(self):
+        if self.hdr is not None:
+            return self.hdr.shape[0]
+        else:
+            return None
+
+    @property
+    def Nx(self):
+        if self.hdr is not None:
+            return self.hdr.shape[1]
+        else:
+            return None
+
+
+class MagStack(MultiStack):
+    """
+    MultiStack class that computes magnitude of stack objects.
+    """
+
+    def slice(self, index, key='igram'):
+        dsum = 0.0
+        for stack in self.stacks:
+            dsum += (stack[key][index, :, :])**2
+        return np.sqrt(dsum)
+
+    def timeseries(self, xy=None, coord=None, key='igram', win_size=1):
+        dsum = 0.0
+        for stack in self.stacks:
+            dsum += (stack.timeseries(xy=xy, coord=coord, key=key, win_size=win_size))**2
+        return np.sqrt(dsum)
+
+
+class SumStack(MultiStack):
+    """
+    MultiStack class that performs a sum on the stack objects.
+    """
+
+    def slice(self, index, key='igram'):
+        dsum = 0.0
+        for stack in self.stacks:
+            dsum += stack[key][index, :, :]
+        return dsum
+
+    def timeseries(self, xy=None, coord=None, key='igram', win_size=1):
+        dsum = 0.0
+        for stack in self.stacks:
+            dsum += stack.timeseries(xy=xy, coord=coord, key=key, win_size=win_size)
+        return dsum
+
+
+# end of file
