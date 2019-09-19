@@ -3,6 +3,7 @@
 # The tools
 from .stress import *
 from .raster import *
+from .stack import *
 from .boundary import *
 from .timeutils import *
 from .matutils import *
