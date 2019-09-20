@@ -228,6 +228,9 @@ class MultiStack:
     def timeseries(self, xy=None, coord=None, key='data', win_size=1):
         raise NotImplementedError('Child classes must implement timeseries function')
 
+    def get_chunk(self, *args, **kwargs):
+        raise NotImplementedError('Child classes must implement get_chunk function')
+
     @property
     def Nt(self):
         if self.tdec is not None:
@@ -267,6 +270,12 @@ class MagStack(MultiStack):
             dsum += (stack.timeseries(xy=xy, coord=coord, key=key, win_size=win_size))**2
         return np.sqrt(dsum)
 
+    def get_chunk(self, slice_y, slice_x, key='data'):
+        dsum = 0.0
+        for stack in self.stacks:
+            dsum += (stack.get_chunk(slice_y, slice_x, key=key))**2
+        return np.sqrt(dsum)
+
 
 class SumStack(MultiStack):
     """
@@ -283,6 +292,12 @@ class SumStack(MultiStack):
         dsum = 0.0
         for stack in self.stacks:
             dsum += stack.timeseries(xy=xy, coord=coord, key=key, win_size=win_size)
+        return dsum
+
+    def get_chunk(self, slice_y, slice_x, key='data'):
+        dsum = 0.0
+        for stack in self.stacks:
+            dsum += stack.get_chunk(slice_y, slice_x, key=key)
         return dsum
 
 

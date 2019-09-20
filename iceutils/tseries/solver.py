@@ -61,7 +61,7 @@ def inversion(stack, userfile, outdir, solver_type='lsqr',
 
         # Loop over pixels in chunk in parallel
         with pymp.Parallel(n_proc) as manager:
-            for index in manager.xrange(npix):
+            for index in manager.range(npix):
 
                 # Get time series
                 i, j = np.unravel_index(index, (chunk_ny, chunk_nx))
@@ -125,7 +125,7 @@ def inversion_points(stack, userfile, x, y, solver_type='lsqr',
 
     # Loop over pixels in chunk in parallel
     with pymp.Parallel(n_proc) as manager:
-        for index in manager.xrange(n_pts):
+        for index in manager.range(n_pts):
 
             # Get time series
             d = stack.timeseries(xy=(x[index], y[index]))
@@ -176,14 +176,14 @@ def butterworth(stack, a, b, outfile, n_proc=1):
         npix = chunk_ny * chunk_nx
 
         # Create shared arrays for results
-        shape = (len(tfit), chunk_ny, chunk_nx)
+        shape = (stack.Nt, chunk_ny, chunk_nx)
         results = {}
         for key in ('long_term', 'short_term'):
             results[key] = pymp.shared.array(shape, dtype=np.float32)
 
         # Loop over pixels in chunk in parallel
         with pymp.Parallel(n_proc) as manager:
-            for index in manager.xrange(npix):
+            for index in manager.range(npix):
 
                 # Get time series
                 i, j = np.unravel_index(index, (chunk_ny, chunk_nx))
