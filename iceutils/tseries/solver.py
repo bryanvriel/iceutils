@@ -150,6 +150,62 @@ def inversion_points(stack, userfile, x, y, solver_type='lsqr',
     # All done
     return results
 
+def butterworth(stack, a, b, outfile, n_proc=1):
+
+    from scipy import signal
+
+    # Instantiate and initialize output stack
+    shape = (stack.Nt, stack.Ny, stack.Nx)
+    ostack = Stack(outfile, mode='w')
+    ostack.initialize(stack.tdec, stack.hdr, data=False)
+    ostack.create_dataset('long_term', shape, dtype='f', chunks=(1, 128, 128))
+    ostack.create_dataset('short_term', shape, dtype='f', chunks=(1, 128, 128))
+
+    # Get list of chunks
+    chunks = get_chunks(stack, 128, 128)
+
+    # Loop over chunks
+    for islice, jslice in chunks:
+
+        # Start timing
+        t0 = pytime.time()
+
+        # Get chunk of time series data
+        data = stack.get_chunk(islice, jslice, key='data')
+        _, chunk_ny, chunk_nx = data.shape
+        npix = chunk_ny * chunk_nx
+
+        # Create shared arrays for results
+        shape = (len(tfit), chunk_ny, chunk_nx)
+        results = {}
+        for key in ('long_term', 'short_term'):
+            results[key] = pymp.shared.array(shape, dtype=np.float32)
+
+        # Loop over pixels in chunk in parallel
+        with pymp.Parallel(n_proc) as manager:
+            for index in manager.xrange(npix):
+
+                # Get time series
+                i, j = np.unravel_index(index, (chunk_ny, chunk_nx))
+                d = data[:,i,j]
+
+                # Perform Butterworth filtering
+                d_filt = signal.filtfilt(b, a, d)
+
+                # Save results
+                results['long_term'][:,i,j] = d_filt
+                results['short_term'][:,i,j] = d - d_filt
+
+        # Save results in output stack
+        for key in ('long_term', 'short_term'):
+            ostack.set_chunk(islice, jslice, results[key], key=key)
+
+        # Timing diagnostics
+        print('Finished chunk', islice, jslice, 'in %f sec' % (pytime.time() - t0))
+
+    # All done
+    return 
+
 def get_chunks(stack, chunk_y, chunk_x):
     """
     Utility function to get chunk bounds.
