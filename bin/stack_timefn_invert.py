@@ -3,7 +3,6 @@
 # externals
 import numpy as np
 import argparse
-from importlib.machinery import SourceFileLoader
 import sys
 import os
 
@@ -37,6 +36,10 @@ def main(args):
 
     # Load stack
     stack = ice.Stack(args.stackfile)
+
+    # Make sure output directory exists
+    if not os.path.isdir(args.outdir):
+        os.mkdir(args.outdir)
         
     # Launch solver
     ice.tseries.inversion(stack, args.user, args.outdir, nt_out=args.interp,

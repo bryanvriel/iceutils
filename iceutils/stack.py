@@ -54,7 +54,7 @@ class Stack:
         if self.fid is not None:
             self.fid.close()
 
-    def initialize(self, tdec, raster_info):
+    def initialize(self, tdec, raster_info, weights=False):
         """
         For a stack in write mode, initialize metadata Datasets.
         """
@@ -66,12 +66,15 @@ class Stack:
         self.hdr = raster_info
         self.set_spatial_metadata(raster_info)
         self.create_dataset('x', self.x.shape, dtype='f', data=self.x)
-        self.create_dataset('y', self.x.shape, dtype='f', data=self.x)
+        self.create_dataset('y', self.y.shape, dtype='f', data=self.y)
 
         # Create datasets for stack data
         shape = (self.Nt, self.Ny, self.Nx)
         self.create_dataset('data', shape, dtype='f', chunks=(1, 128, 128))
-        self.create_dataset('weights', shape, dtype='f', chunks=(1, 128, 128))
+
+        # Optional weights dataset
+        if weights:
+            self.create_dataset('weights', shape, dtype='f', chunks=(1, 128, 128))
 
     def set_spatial_metadata(self, raster_info):
         """
@@ -122,6 +125,12 @@ class Stack:
         Extract Stack 2d slice at given time index.
         """
         return self._datasets[key][index, :, :]
+
+    def set_slice(self, index, data, key='data'):
+        """
+        Set Stack 2d slice at given time index.
+        """
+        self._datasets[key][index, :, :] = data
 
     def get_chunk(self, slice_y, slice_x, key='data'):
         """

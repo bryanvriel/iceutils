@@ -8,6 +8,23 @@ import sys
 solvers.options['show_progress'] = False
 
 
+def select_solver(solver_type, reg_indices=None, rw_iter=1, regMat=None, robust=False,
+                  penalty=1.0, n_nonzero_coefs=10):
+    """
+    Factory for instantiating a linear regression solver with the correct options
+    and returning it.
+    """
+    if solver_type == 'lasso':
+        solver = LassoRegression(reg_indices, penalty, regMat=regMat, rw_iter=rw_iter)
+    elif solver_type == 'ridge':
+        solver = RidgeRegression(reg_indices, penalty, regMat=regMat)
+    elif solver_type == 'omp':
+        solver = OrthogonalMatchingPursuit(n_nonzero_coefs=n_nonzero_coefs, regMat=regMat)
+    elif solver_type == 'lsqr':
+        solver = LinearRegression(robust=robust)
+    return solver
+
+
 class LinearRegression:
     """
     Base class for all linear regression solvers. Implements a simple linear
