@@ -29,7 +29,7 @@ def inversion(stack, userfile, outdir, solver_type='lsqr',
 
     # Instantiate a solver
     solver = select_solver(solver_type, reg_indices=model.itransient, rw_iter=rw_iter,
-                           regMat=regMat, robust=robust, penalty=regParasm,
+                           regMat=regMat, robust=robust, penalty=regParam,
                            n_nonzero_coefs=n_nonzero_coefs)
     
     # Instantiate and initialize output stacks
