@@ -54,7 +54,7 @@ class Stack:
         if self.fid is not None:
             self.fid.close()
 
-    def initialize(self, tdec, raster_info, data=True, weights=False):
+    def initialize(self, tdec, raster_info, data=True, weights=False, chunks=(1, 128, 128)):
         """
         For a stack in write mode, initialize metadata Datasets.
         """
@@ -71,11 +71,11 @@ class Stack:
         # Create datasets for stack data
         if data:
             shape = (self.Nt, self.Ny, self.Nx)
-            self.create_dataset('data', shape, dtype='f', chunks=(1, 128, 128))
+            self.create_dataset('data', shape, dtype='f', chunks=chunks)
 
         # Optional weights dataset
         if weights:
-            self.create_dataset('weights', shape, dtype='f', chunks=(1, 128, 128))
+            self.create_dataset('weights', shape, dtype='f', chunks=chunks)
 
     def set_spatial_metadata(self, raster_info):
         """
