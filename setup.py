@@ -34,7 +34,8 @@ if __name__ == '__main__':
               maintainer='Bryan Riel',
               author='Bryan Riel',
               author_email='bryanvriel@gmail.com',
-              scripts=['bin/stack_timefn_invert.py'],
+              scripts=['bin/stack_timefn_invert.py',
+                       'bin/crop_stack.py'],
               configuration=configuration)
     finally:
         del sys.path[0]
