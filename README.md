@@ -15,7 +15,7 @@ To install `iceutils`, first, clone the repository:
 ```
 git clone git@github.com:BryanRiel/iceutils.git
 ```
-Then, simply place the `iceutils` directory in your `PYTHONPATH`.
+Then, simply run `python setup.py install` in the main repository directory to install.
 
 In the cloned directory, you'll find several Python source files, each containing various functions and classes. While the naming of the source files gives a hint about what they contain, all functions are classes are imported into a common namespace. For example, the file `timeutils.py` contains a function `generateRegularTimeArray()`. This function would be called as follows:
 ```python
@@ -158,6 +158,22 @@ data = stack.timeseries(coord=coord)
 # Extract a 3x3 window centered around coordinate
 # of interest, and get mean time series
 data = stack.timeseries(xy=xy, win_size=3)
+```
+
+### The `MultiStack` class
+
+More often than not, we would like to compute quantities of multiple stacks, e.g. velocity magnitude given stacks of x- and y- velocity components. Instead of creating new stack objects that compute those quantities and then write the data to disk, we can use a `MultiStack` class that acts as a "virtual" Stack object with a limited set of arithmetic operations evaluated on multiple Stacks when queried. Different child classes inherit from `MultiStack` to implement the different arithmetic operations. Currently, we only have `MagStack` for vector magnitudes and `SumStack` for summing multiple stacks. As an example, let's create a velocity magnitude Stack from two independent Stacks `vx.h5` and `vy.h5` which represent velocities in the X- and Y-directions, respectively:
+```python
+stack = ice.MagStack(files=['vx.h5', 'vy.h5'])
+```
+This object can then be queried in the same way a `Stack` can be queried:
+```
+# Get time series
+d = stack.timeseries(xy=(1000.0, 1000.0))
+
+# Get velocity slice at a given time index
+index = 100
+v = stack.slice(index)
 ```
 
 ## Time series decomposition
