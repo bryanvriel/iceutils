@@ -14,8 +14,10 @@ def parse():
         help='Output cropped stack file.')
     parser.add_argument('-projWin', action='store', type=float, nargs=4, default=None,
         help='Subwindow based on geographic coordinates.')
-    parser.add_argument('-srcWin', action='store', type=float, nargs=4, default=None,
-        help='Subwindow based on geographic coordinates.')
+    parser.add_argument('-srcWin', action='store', type=int, nargs=4, default=None,
+        help='Subwindow based on image coordinates and window size.')
+    parser.add_argument('-chunks', action='store', type=int, nargs=2, default=[128, 128],
+        help='Output HDF5 chunk size. Default: 128 128')
     parser.add_argument('-tWin', action='store', type=float, nargs=2, default=None,
         help='Temporal subwindow in decimal years.')
     return parser.parse_args()
@@ -78,10 +80,14 @@ def main(args):
 
     # Create output stack
     ostack = ice.Stack(args.output, mode='w')
-    ostack.initialize(tdec, hdr, data=True, weights=True, chunks=(1, 64, 64))
+    ostack.initialize(tdec, hdr, data=True, weights=True,
+                      chunks=(1, args.chunks[0], args.chunks[1]))
 
     # Manually fill in the data
-    ostack['data'][:, :, :] = stack['data'][tslice, islice, jslice]
+    try:
+        ostack['data'][:, :, :] = stack['data'][tslice, islice, jslice]
+    except KeyError:
+        ostack['data'][:, :, :] = stack['igram'][tslice, islice, jslice]
     ostack['weights'][:, :, :] = stack['weights'][tslice, islice, jslice]
 
     

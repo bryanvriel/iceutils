@@ -7,6 +7,7 @@ from sklearn.linear_model import orthogonal_mp_gram, RANSACRegressor
 import sys
 solvers.options['show_progress'] = False
 
+from ..constants import NULL_REG
 
 def select_solver(solver_type, reg_indices=None, rw_iter=1, regMat=None, robust=False,
                   penalty=1.0, n_nonzero_coefs=10):
@@ -14,6 +15,15 @@ def select_solver(solver_type, reg_indices=None, rw_iter=1, regMat=None, robust=
     Factory for instantiating a linear regression solver with the correct options
     and returning it.
     """
+    # Form regularization indices from regularization matrix (inverse covariance)
+    if reg_indices is None and regMat is not None:
+        cov = np.diag(regMat)
+        reg_indices = (cov < NULL_REG).nonzero()[0]
+    elif reg_indices is None:
+        reg_indices = []
+
+
+    # Instantiate a solver
     if solver_type == 'lasso':
         solver = LassoRegression(reg_indices, penalty, regMat=regMat, rw_iter=rw_iter)
     elif solver_type == 'ridge':
@@ -22,6 +32,8 @@ def select_solver(solver_type, reg_indices=None, rw_iter=1, regMat=None, robust=
         solver = OrthogonalMatchingPursuit(n_nonzero_coefs=n_nonzero_coefs, regMat=regMat)
     elif solver_type == 'lsqr':
         solver = LinearRegression(robust=robust)
+
+    # Done
     return solver
 
 

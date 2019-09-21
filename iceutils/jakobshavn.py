@@ -123,14 +123,16 @@ def load_extended_centerline(smooth=True, km=True, s=0.25, n=200, path=None, tpa
 
     return centerline
 
-def ocean_mask(hdr):
+def ocean_mask(hdr, path=None):
     """
     Create ocean mask for a given RasterInfo object.
     """
     from .raster import Raster
 
     # Load Arctic DEM
-    dem = Raster(rasterfile='/data0/briel/topo/jakobshavn_32m/jakobshavn_arcticdem_32m.tif')
+    if path is None:
+        path = '/data0/briel/topo/jakobshavn_32m/jakobshavn_arcticdem_32m.tif'
+    dem = Raster(rasterfile=path)
 
     # Crop to header
     dem.resample(hdr)

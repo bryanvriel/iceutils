@@ -159,6 +159,12 @@ class Stack:
         else:
             return None
 
+        # Check bounds
+        if row >= self.Ny or row < 0:
+            return None
+        if col >= self.Nx or col < 0:
+            return None
+
         # Spatial slice
         if win_size > 1:
             islice = slice(row - win_size // 2, row + win_size // 2 + 1)
