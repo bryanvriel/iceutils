@@ -31,15 +31,16 @@ def inversion(stack, userfile, outdir, solver_type='lsqr',
     solver = select_solver(solver_type, reg_indices=model.itransient, rw_iter=rw_iter,
                            regMat=regMat, robust=robust, penalty=regParam,
                            n_nonzero_coefs=n_nonzero_coefs)
+
+    # Get list of chunks
+    _, chunk_ny, chunk_nx = stack['chunk_shape'][()]
+    chunks = get_chunks(stack, chunk_ny, chunk_nx)
     
     # Instantiate and initialize output stacks
     ostacks = {}
     for key in ('full', 'secular', 'seasonal', 'transient', 'sigma'):
         ostacks[key] = Stack(os.path.join(outdir, 'interp_output_%s.h5' % key), mode='w')
-        ostacks[key].initialize(tfit, stack.hdr) 
-
-    # Get list of chunks
-    chunks = get_chunks(stack, 128, 128)
+        ostacks[key].initialize(tfit, stack.hdr, chunks=(1, chunk_ny, chunk_nx))
 
     # Loop over chunks
     for islice, jslice in chunks:
@@ -130,6 +131,10 @@ def inversion_points(stack, userfile, x, y, solver_type='lsqr',
             # Get time series
             d = stack.timeseries(xy=(x[index], y[index]))
             w = stack.timeseries(xy=(x[index], y[index]), key='weights')
+            if d is None:
+                continue
+
+            # Check number of valid data
             mask = np.isfinite(d)
             nfinite = len(mask.nonzero()[0])
             if nfinite < n_min:

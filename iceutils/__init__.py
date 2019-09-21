@@ -7,6 +7,7 @@ from .stack import *
 from .boundary import *
 from .timeutils import *
 from .matutils import *
+from .constants import *
 from . import tseries
 
 # Optional time series model will require pygeodesy
