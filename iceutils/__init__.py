@@ -8,13 +8,8 @@ from .boundary import *
 from .timeutils import *
 from .matutils import *
 from .constants import *
+from .visualization import *
 from . import tseries
-
-# Optional time series model will require pygeodesy
-try:
-    from .model import *
-except ImportError:
-    pass
 
 # Site-dependent modules
 from . import jakobshavn

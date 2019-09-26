@@ -2,7 +2,6 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
-from mpl_toolkits.basemap import cm
 import iceutils as ice
 import argparse
 import sys
@@ -16,6 +15,12 @@ def parse():
         help='Input raster file to display.')
     parser.add_argument('output', type=str,
         help='Output points file.')
+    parser.add_argument('-ref', action='store', type=str, default=None,
+        help='Reference SAR raster for background. Default: None.')
+    parser.add_argument('-alpha', action='store', type=float, default=1.0,
+        help='Image alpha for displaying raster. Default: 1.0.')
+    parser.add_argument('-cmap', action='store', type=str, default='GMT_haxby',
+        help='Matplotlib cmap to use for displaying raster. Default: GMT_haxby.')
     parser.add_argument('-clim', action='store', type=float, nargs=2, default=[None, None],
         help='Color limits for display.')
     return parser.parse_args()
@@ -25,17 +30,25 @@ def main(args):
     # Load the raster
     raster = ice.Raster(rasterfile=args.rasterfile)
 
-    path = '/Users/briel/data/jakobshavn/gimp_imagery/S1_2016-02-01_2016-02-12_northwest_v02.dat'
-    sar = ice.Raster(rasterfile=path)
-    db = 10.0 * np.log10(sar.data)
-    low = np.percentile(db.ravel(), 5)
-    high = np.percentile(db.ravel(), 99.9)
+    # Load reference SAR image
+    if args.ref is not None:
+        sar = ice.Raster(rasterfile=args.ref)
+        if sar.hdr != raster.hdr:
+            sar.resample(raster.hdr)
+        db = 10.0 * np.log10(sar.data)
+        low = np.percentile(db.ravel(), 5)
+        high = np.percentile(db.ravel(), 99.9)
+    else:
+        db = None
 
     fig, ax = plt.subplots()
     vmin, vmax = args.clim
-    ref = ax.imshow(db, aspect='auto', cmap='gray', vmin=low, vmax=high, extent=raster.hdr.extent)
-    im = ax.imshow(raster.data, aspect='auto', vmin=vmin, vmax=vmax, cmap=cm.GMT_haxby,
-                   extent=raster.hdr.extent, alpha=0.2)
+    cmap = ice.get_cmap(args.cmap)
+    if db is not None:
+        ref = ax.imshow(db, aspect='auto', cmap='gray', vmin=low, vmax=high,
+                        extent=raster.hdr.extent)
+    im = ax.imshow(raster.data, aspect='auto', vmin=vmin, vmax=vmax, cmap=cmap,
+                   extent=raster.hdr.extent, alpha=args.alpha)
 
     # Define action for clicking on deformation map
     xpts = []; ypts = []
