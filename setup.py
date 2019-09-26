@@ -28,15 +28,22 @@ if __name__ == '__main__':
     os.chdir(src_path)
     sys.path.insert(0, src_path)
 
+    # List of scripts to install
+    scripts = [
+        'bin/ice_stack_invert.py',
+        'bin/ice_crop_stack.py',
+        'bin/ice_interactive_trace.py',
+        'bin/ice_resample.py',
+        'bin/ice_view_stack_mean.py'
+    ]
+
     # Run build
     try:
         setup(name='iceutils',
               maintainer='Bryan Riel',
               author='Bryan Riel',
               author_email='bryanvriel@gmail.com',
-              scripts=['bin/stack_timefn_invert.py',
-                       'bin/crop_stack.py',
-                       'bin/interactive_points.py'],
+              scripts=scripts,
               configuration=configuration)
     finally:
         del sys.path[0]
