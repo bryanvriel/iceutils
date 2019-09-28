@@ -16,6 +16,8 @@ def parse():
         help='Input stack file to subset from.')
     parser.add_argument('-o,--outdir', action='store', type=str, default='output',
         help='Output directory. Default: "output".', dest='outdir')
+    parser.add_argument('-dkey', action='store', type=str, default='data',
+        help='HDF5 Dataset name for time series data. Default: data.')
     parser.add_argument('-penalty', '--penalty', action='store', default=1.0, type=float,
         dest='penalty', help='Penalty for inversion problem. Default: 1.0')
     parser.add_argument('-rw_iter', action='store', type=int, default=1,
@@ -42,7 +44,7 @@ def main(args):
         os.mkdir(args.outdir)
         
     # Launch solver
-    ice.tseries.inversion(stack, args.user, args.outdir, nt_out=args.interp,
+    ice.tseries.inversion(stack, args.user, args.outdir, nt_out=args.interp, dkey=args.dkey,
                           solver_type=args.solver, n_proc=args.n_proc, regParam=args.penalty,
                           rw_iter=args.rw_iter, n_min=args.n_min)
     

@@ -13,7 +13,7 @@ from ..stack import Stack
 from .LinearRegression import *
 from .model import build_temporal_model
 
-def inversion(stack, userfile, outdir, solver_type='lsqr',
+def inversion(stack, userfile, outdir, solver_type='lsqr', dkey='data',
               nt_out=200, n_proc=8, regParam=1.0, rw_iter=1, robust=False,
               n_nonzero_coefs=10, n_min=20):
 
@@ -49,7 +49,7 @@ def inversion(stack, userfile, outdir, solver_type='lsqr',
         t0 = pytime.time()
 
         # Get chunk of time series data and weights
-        data = stack.get_chunk(islice, jslice, key='data')
+        data = stack.get_chunk(islice, jslice, key=dkey)
         wgts = stack.get_chunk(islice, jslice, key='weights')
         _, chunk_ny, chunk_nx = data.shape
         npix = chunk_ny * chunk_nx
