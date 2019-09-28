@@ -1,13 +1,13 @@
 #-*- coding: utf-8 -*-
 
 import matplotlib.pyplot as plt
-from mpl_toolkits.basemap import cm
 
 def get_cmap(cmap):
 
     try:
         cmap = plt.get_cmap(cmap)
     except ValueError:
+        from mpl_toolkits.basemap import cm
         try:
             cmap = getattr(cm, cmap)
         except AttributeError:
