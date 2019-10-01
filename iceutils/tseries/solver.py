@@ -3,6 +3,7 @@
 import numpy as np
 import pickle
 import time as pytime
+from scipy import signal
 import pymp
 import h5py
 import copy
@@ -157,8 +158,6 @@ def inversion_points(stack, userfile, x, y, solver_type='lsqr',
 
 def butterworth(stack, a, b, outfile, n_proc=1):
 
-    from scipy import signal
-
     # Instantiate and initialize output stack
     shape = (stack.Nt, stack.Ny, stack.Nx)
     ostack = Stack(outfile, mode='w')
@@ -211,6 +210,28 @@ def butterworth(stack, a, b, outfile, n_proc=1):
     # All done
     return 
 
+def butterworth_coeffs(frequency=None, period=None, dt=1.0, order=3):
+    """
+    Compute butterworth coefficients for a given cutoff frequency or period in time coordinates
+    determined by sampling interval dt.
+    """
+    # Compute sampling and Nyquist frequency
+    Fs = 1.0 / dt
+    Fn = 0.5 * Fs
+
+    # Compute cutoff frequency
+    if frequency is None and period is not None:
+        frequency = 1.0 / period
+    elif frequency is None:
+        raise ValueError('Must supply cutoff frequency or period')
+
+    # Compute normalized cutoff frequency
+    w_low = frequency / Fn
+
+    # Compute Butterworth filter coefficients
+    b, a = signal.butter(order, w_low)
+    return b,a
+    
 def get_chunks(stack, chunk_y, chunk_x):
     """
     Utility function to get chunk bounds.
