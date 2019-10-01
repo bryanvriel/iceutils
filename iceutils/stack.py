@@ -182,6 +182,39 @@ class Stack:
         # Done
         return data
 
+    def resample(self, ref_hdr, output, key='data', dtype='f', chunks=None):
+        """
+        Resample dataset from one coordinate system to another provided by a
+        RasterInfo object.
+        """
+        from tqdm import tqdm
+        from .raster import interpolate_array
+
+        # Check if dataset exists to clean it
+        if not key in self._datasets.keys():
+            print('Warning: dataset %s not in stack' % key)
+            return
+        
+        # Initialize dataset in output stack
+        Ny, Nx = ref_hdr.shape
+        shape = (self.Nt, Ny, Nx)
+        output.create_dataset(key, shape, dtype=dtype, chunks=chunks)
+
+        # Loop over slices and interpolate
+        for k in tqdm(range(self.Nt)):
+            d = self.slice(k, key=key)
+            output[key][k,:,:] = interpolate_array(d, self.hdr, None, None, ref_hdr=ref_hdr)
+
+        # Done
+        return
+
+    @property
+    def dt(self):
+        """
+        Return mean sampling interval.
+        """
+        return np.mean(np.diff(self.tdec))
+
     @property
     def Nt(self):
         if self.tdec is not None:
@@ -236,6 +269,10 @@ class MultiStack:
 
     def get_chunk(self, *args, **kwargs):
         raise NotImplementedError('Child classes must implement get_chunk function')
+
+    @property
+    def dt(self):
+        return self.stacks[0].dt
 
     @property
     def Nt(self):
