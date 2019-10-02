@@ -167,7 +167,7 @@ class Model:
 
         # Compute the functional partitions
         results = {'secular': secular, 'seasonal': seasonal, 'transient': transient,
-            'step': step, 'full': secular + seasonal + transient + step}
+                   'step': step, 'full': secular + seasonal + transient + step}
 
         # Add uncertainty if applicable
         if hasattr(self, 'Cm') and sigma:

@@ -28,6 +28,8 @@ def parse():
         help='Matplotlib cmap to use for displaying raster. Default: GMT_haxby.')
     parser.add_argument('-clim', action='store', type=float, nargs=2, default=[None, None],
         help='Color limits for display.')
+    parser.add_argument('-sigma', action='store_true',
+        help='Plot errobars using weights dataset.')
     return parser.parse_args()
 
 def main(args):
@@ -77,10 +79,15 @@ def main(args):
 
         # Get time series for cursor location
         d = stack.timeseries(xy=(x, y), key=args.key)
-
+        
         # Plot data and long-term fit
         axts.clear()
-        axts.plot(stack.tdec, d, 'o')
+        if args.sigma:
+            w = stack.timeseries(xy=(x, y), key='weights')
+            sigma = 1.0 / w
+            axts.errorbar(stack.tdec, d, yerr=sigma, fmt='o')
+        else:
+            axts.plot(stack.tdec, d, 'o')
         axts.set_xlabel('Year')
         axts.set_ylabel('Velocity')
 

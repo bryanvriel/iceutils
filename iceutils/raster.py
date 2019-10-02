@@ -97,12 +97,12 @@ class Raster:
 
         return
 
-    def resample(self, hdr):
+    def resample(self, hdr, order=3):
         """
         Resample raster data to another coordinate system provided by a RasterInfo object.
         """
         # Interpolate
-        data = interpolate_raster(self, None, None, ref_hdr=hdr)
+        data = interpolate_raster(self, None, None, ref_hdr=hdr, order=order)
 
         # Update members
         self.data = data
