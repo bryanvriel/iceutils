@@ -5,6 +5,7 @@ import h5py
 import sys
 
 from .raster import RasterInfo
+from .timeutils import datestr2tdec
 
 class Stack:
     """
@@ -208,6 +209,15 @@ class Stack:
         # Done
         return
 
+    def time_to_index(self, t, date=None):
+        """
+        Convenience function to convert decimal year (or datetime) to a time index using
+        nearest neighbor.
+        """
+        if t is None and date is not None:
+            t = datestr2tdec(pydtime=date)
+        return np.argmin(np.abs(self.tdec - t))
+
     @property
     def dt(self):
         """
@@ -240,8 +250,8 @@ class Stack:
 class MultiStack:
     """
     Stack object that represents some arithmetic manipulation of multiple Stacks. Child
-    classes should inherit from this class and implement the self.slice and
-    self.timeseries methods.
+    classes should inherit from this class and implement the self.slice,
+    self.timeseries, and self.get_chunk methods.
     """
 
     def __init__(self, stacks=None, files=None):
@@ -269,6 +279,9 @@ class MultiStack:
 
     def get_chunk(self, *args, **kwargs):
         raise NotImplementedError('Child classes must implement get_chunk function')
+
+    def time_to_index(self, t, date=None):
+        return self.stacks[0].time_to_index(t, date=date)
 
     @property
     def dt(self):
