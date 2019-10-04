@@ -56,7 +56,7 @@ def load_front(smooth=True, km=True, s=0.25):
 
     return front
 
-def load_centerline(smooth=True, km=True, s=0.25, path=None):
+def load_centerline(smooth=True, km=True, s=0.25, path=None, n=200):
 
     # Scale factor
     if km:
@@ -74,7 +74,7 @@ def load_centerline(smooth=True, km=True, s=0.25, path=None):
 
     # Smoothing spline for points
     if smooth:
-        x, y = smoothe_line(x, y, n=200, s=s)
+        x, y = smoothe_line(x, y, n=n, s=s)
     centerline = Boundary(x=x, y=y)
 
     return centerline
@@ -123,14 +123,16 @@ def load_extended_centerline(smooth=True, km=True, s=0.25, n=200, path=None, tpa
 
     return centerline
 
-def ocean_mask(hdr):
+def ocean_mask(hdr, path=None):
     """
     Create ocean mask for a given RasterInfo object.
     """
     from .raster import Raster
 
     # Load Arctic DEM
-    dem = Raster(rasterfile='/data0/briel/topo/jakobshavn_32m/jakobshavn_arcticdem_32m.tif')
+    if path is None:
+        path = '/data0/briel/topo/jakobshavn_32m/jakobshavn_arcticdem_32m.tif'
+    dem = Raster(rasterfile=path)
 
     # Crop to header
     dem.resample(hdr)

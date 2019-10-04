@@ -97,12 +97,12 @@ class Raster:
 
         return
 
-    def resample(self, hdr):
+    def resample(self, hdr, order=3):
         """
         Resample raster data to another coordinate system provided by a RasterInfo object.
         """
         # Interpolate
-        data = interpolate_raster(self, None, None, ref_hdr=hdr)
+        data = interpolate_raster(self, None, None, ref_hdr=hdr, order=order)
 
         # Update members
         self.data = data
@@ -405,17 +405,6 @@ def interpolate_raster(raster, x, y, ref_hdr=None, order=3, time_index=None):
     """
     Interpolate raster at arbitrary points.
     """
-    from scipy.ndimage.interpolation import map_coordinates
-
-    # If a RasterInfo object has been passed, generate output coordinates
-    if ref_hdr is not None:
-        x, y = ref_hdr.meshgrid()
-
-    # Ravel points to 1D
-    row = (y.ravel() - raster.hdr.ystart) / raster.hdr.dy
-    col = (x.ravel() - raster.hdr.xstart) / raster.hdr.dx
-    coords = np.vstack((row, col))
-
     # Extract time slice if index provided
     if time_index is not None:
         r_data = raster.data[time_index,:,:]
@@ -423,7 +412,23 @@ def interpolate_raster(raster, x, y, ref_hdr=None, order=3, time_index=None):
         r_data = raster.data
 
     # Interpolate
-    values = map_coordinates(r_data, coords, order=order, prefilter=False,
+    return interpolate_array(r_data, raster.hdr, x, y, ref_hdr=ref_hdr, order=order)
+
+def interpolate_array(array, hdr, x, y, ref_hdr=None, order=3):
+    """
+    Interpolate 2D array at arbitrary points.
+    """
+    # If a RasterInfo object has been passed, generate output coordinates
+    if ref_hdr is not None:
+        x, y = ref_hdr.meshgrid()
+
+    # Ravel points to 1D
+    row = (y.ravel() - hdr.ystart) / hdr.dy
+    col = (x.ravel() - hdr.xstart) / hdr.dx
+    coords = np.vstack((row, col))
+
+    # Interpolate
+    values = map_coordinates(array, coords, order=order, prefilter=False,
                              mode='constant', cval=np.nan)
 
     # Recover original shape and return
