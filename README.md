@@ -178,33 +178,6 @@ v = stack.slice(index)
 
 ## Time series decomposition
 
-Geodetic time series generally contain signals from many different temporal scales. These signals can correspond to distinct physical mechanisms, so one task of interest is to decompose time series into a linear combination of signals of different temporal time scales and patterns. In `iceutils`, this is accomplished via a linear regression problem where the columns of the design matrix consist of different "basis" functions we expect to see in a given time series. For example, the design matrix can include a linear function for secular processes, sinusoidal functions for periodic processes, and one-sided splines for transient processes. When the design matrix is overcomplete or ill-posed (in a linear algebra sense), some form of coefficient regularization can be used to arrive at a unique solution.
-
-In this section, we'll make use of another package to help construct the design matrix, perform least squares, and decompose time series into different functional components. This package, `pygeodesy`, can be obtained using:
-```
-git clone git@github.com:BryanRiel/pygeodesy.git
-```
-
-To do the inversion:
-```python
-# Load the collection
-collection, Cm = load_collection(dates)
-
-# Create a model for handling the time function
-model = pg.model.Model(dates, collection=collection)
-
-# Create a solver
-solver = pg.model.solvers.RidgeRegression(model.reg_indices, 0.001)
-
-# Perform inversion
-m, Cm = solver.invert(A, data)
-
-# Generate prediction
-prediction = solver.predict(m)
-
-# Unpack the functional components of interest
-seasonal = prediction['seasonal']
-long_term = prediction['transient'] + prediction['secular']
-```
+See the IPython notebook `doc/time_series_inversion.ipynb` for a full example.
 
 ## Miscellaneous Utilities
