@@ -56,7 +56,7 @@ def load_front(smooth=True, km=True, s=0.25):
 
     return front
 
-def load_centerline(smooth=True, km=True, s=0.25, path=None):
+def load_centerline(smooth=True, km=True, s=0.25, path=None, n=200):
 
     # Scale factor
     if km:
@@ -74,7 +74,7 @@ def load_centerline(smooth=True, km=True, s=0.25, path=None):
 
     # Smoothing spline for points
     if smooth:
-        x, y = smoothe_line(x, y, n=200, s=s)
+        x, y = smoothe_line(x, y, n=n, s=s)
     centerline = Boundary(x=x, y=y)
 
     return centerline
