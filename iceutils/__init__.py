@@ -7,13 +7,9 @@ from .stack import *
 from .boundary import *
 from .timeutils import *
 from .matutils import *
-from . import timefn
-
-# Optional time series model will require pygeodesy
-try:
-    from .model import *
-except ImportError:
-    pass
+from .constants import *
+from .visualization import *
+from . import tseries
 
 # Site-dependent modules
 from . import jakobshavn

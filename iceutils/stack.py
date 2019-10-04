@@ -5,6 +5,7 @@ import h5py
 import sys
 
 from .raster import RasterInfo
+from .timeutils import datestr2tdec
 
 class Stack:
     """
@@ -54,6 +55,29 @@ class Stack:
         if self.fid is not None:
             self.fid.close()
 
+    def initialize(self, tdec, raster_info, data=True, weights=False, chunks=(1, 128, 128)):
+        """
+        For a stack in write mode, initialize metadata Datasets.
+        """
+        # The time array
+        self.tdec = tdec
+        self.create_dataset('tdec', tdec.shape, dtype='d', data=tdec)
+
+        # Spatial information
+        self.hdr = raster_info
+        self.set_spatial_metadata(raster_info)
+        self.create_dataset('x', self.x.shape, dtype='f', data=self.x)
+        self.create_dataset('y', self.y.shape, dtype='f', data=self.y)
+
+        # Create datasets for stack data
+        if data:
+            shape = (self.Nt, self.Ny, self.Nx)
+            self.create_dataset('data', shape, dtype='f', chunks=chunks)
+
+        # Optional weights dataset
+        if weights:
+            self.create_dataset('weights', shape, dtype='f', chunks=chunks)
+
     def set_spatial_metadata(self, raster_info):
         """
         Set spatial arrays from a RasterInfo object.
@@ -98,13 +122,31 @@ class Stack:
 
         return
 
-    def slice(self, index, key='igram'):
+    def slice(self, index, key='data'):
         """
         Extract Stack 2d slice at given time index.
         """
         return self._datasets[key][index, :, :]
 
-    def timeseries(self, xy=None, coord=None, key='igram', win_size=1):
+    def set_slice(self, index, data, key='data'):
+        """
+        Set Stack 2d slice at given time index.
+        """
+        self._datasets[key][index, :, :] = data
+
+    def get_chunk(self, slice_y, slice_x, key='data'):
+        """
+        Get a 3d chunk of data defined by 2d slice objects.
+        """
+        return self._datasets[key][:, slice_y, slice_x]
+
+    def set_chunk(self, slice_y, slice_x, data, key='data'):
+        """
+        Set a 3d chunk of data defined by 2d slice objects.
+        """
+        self._datasets[key][:, slice_y, slice_x] = data
+
+    def timeseries(self, xy=None, coord=None, key='data', win_size=1):
         """
         Extract time series at a given spatial coordinate. Optionally extract a window of
         time series and average spatially.
@@ -116,6 +158,12 @@ class Stack:
         elif coord is not None:
             row, col = coord
         else:
+            return None
+
+        # Check bounds
+        if row >= self.Ny or row < 0:
+            return None
+        if col >= self.Nx or col < 0:
             return None
 
         # Spatial slice
@@ -134,6 +182,48 @@ class Stack:
 
         # Done
         return data
+
+    def resample(self, ref_hdr, output, key='data', dtype='f', chunks=None):
+        """
+        Resample dataset from one coordinate system to another provided by a
+        RasterInfo object.
+        """
+        from tqdm import tqdm
+        from .raster import interpolate_array
+
+        # Check if dataset exists to clean it
+        if not key in self._datasets.keys():
+            print('Warning: dataset %s not in stack' % key)
+            return
+        
+        # Initialize dataset in output stack
+        Ny, Nx = ref_hdr.shape
+        shape = (self.Nt, Ny, Nx)
+        output.create_dataset(key, shape, dtype=dtype, chunks=chunks)
+
+        # Loop over slices and interpolate
+        for k in tqdm(range(self.Nt)):
+            d = self.slice(k, key=key)
+            output[key][k,:,:] = interpolate_array(d, self.hdr, None, None, ref_hdr=ref_hdr)
+
+        # Done
+        return
+
+    def time_to_index(self, t, date=None):
+        """
+        Convenience function to convert decimal year (or datetime) to a time index using
+        nearest neighbor.
+        """
+        if t is None and date is not None:
+            t = datestr2tdec(pydtime=date)
+        return np.argmin(np.abs(self.tdec - t))
+
+    @property
+    def dt(self):
+        """
+        Return mean sampling interval.
+        """
+        return np.mean(np.diff(self.tdec))
 
     @property
     def Nt(self):
@@ -160,8 +250,8 @@ class Stack:
 class MultiStack:
     """
     Stack object that represents some arithmetic manipulation of multiple Stacks. Child
-    classes should inherit from this class and implement the self.slice and
-    self.timeseries methods.
+    classes should inherit from this class and implement the self.slice,
+    self.timeseries, and self.get_chunk methods.
     """
 
     def __init__(self, stacks=None, files=None):
@@ -181,11 +271,21 @@ class MultiStack:
         self.tdec = self.stacks[0].tdec
         self.hdr = self.stacks[0].hdr
 
-    def slice(self, index, key='igram'):
+    def slice(self, index, key='data'):
         raise NotImplementedError('Child classes must implement slice function')
 
-    def timeseries(self, xy=None, coord=None, key='igram', win_size=1):
+    def timeseries(self, xy=None, coord=None, key='data', win_size=1):
         raise NotImplementedError('Child classes must implement timeseries function')
+
+    def get_chunk(self, *args, **kwargs):
+        raise NotImplementedError('Child classes must implement get_chunk function')
+
+    def time_to_index(self, t, date=None):
+        return self.stacks[0].time_to_index(t, date=date)
+
+    @property
+    def dt(self):
+        return self.stacks[0].dt
 
     @property
     def Nt(self):
@@ -214,16 +314,22 @@ class MagStack(MultiStack):
     MultiStack class that computes magnitude of stack objects.
     """
 
-    def slice(self, index, key='igram'):
+    def slice(self, index, key='data'):
         dsum = 0.0
         for stack in self.stacks:
             dsum += (stack[key][index, :, :])**2
         return np.sqrt(dsum)
 
-    def timeseries(self, xy=None, coord=None, key='igram', win_size=1):
+    def timeseries(self, xy=None, coord=None, key='data', win_size=1):
         dsum = 0.0
         for stack in self.stacks:
             dsum += (stack.timeseries(xy=xy, coord=coord, key=key, win_size=win_size))**2
+        return np.sqrt(dsum)
+
+    def get_chunk(self, slice_y, slice_x, key='data'):
+        dsum = 0.0
+        for stack in self.stacks:
+            dsum += (stack.get_chunk(slice_y, slice_x, key=key))**2
         return np.sqrt(dsum)
 
 
@@ -232,16 +338,22 @@ class SumStack(MultiStack):
     MultiStack class that performs a sum on the stack objects.
     """
 
-    def slice(self, index, key='igram'):
+    def slice(self, index, key='data'):
         dsum = 0.0
         for stack in self.stacks:
             dsum += stack[key][index, :, :]
         return dsum
 
-    def timeseries(self, xy=None, coord=None, key='igram', win_size=1):
+    def timeseries(self, xy=None, coord=None, key='data', win_size=1):
         dsum = 0.0
         for stack in self.stacks:
             dsum += stack.timeseries(xy=xy, coord=coord, key=key, win_size=win_size)
+        return dsum
+
+    def get_chunk(self, slice_y, slice_x, key='data'):
+        dsum = 0.0
+        for stack in self.stacks:
+            dsum += stack.get_chunk(slice_y, slice_x, key=key)
         return dsum
 
 
