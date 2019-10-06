@@ -1,5 +1,6 @@
 #-*- coding: utf-8 -*-
 
+import functools
 import numpy as np
 from ..matutils import dmultl
 from cvxopt import solvers, matrix, sparse, spmatrix, log, div, blas
@@ -43,13 +44,19 @@ class LinearRegression:
     least squares.
     """
 
-    def __init__(self, robust=False, **kwargs):
+    def __init__(self, robust=False, pinv=False, **kwargs):
         """
         Initialize the LinearRegression class.
         """
         self.robust = robust
         if robust:
             self.ransac = RANSACRegressor(min_samples=10)
+
+        # Cache operator for computing array inverses
+        if pinv:
+            self.inv_func = functools.partial(np.linalg.pinv, rcond=1.0e-10)
+        else:
+            self.inv_func = np.linalg.inv
 
     def invert(self, G, d, wgt=None):
         """
@@ -78,7 +85,7 @@ class LinearRegression:
         else:
             GtG = np.dot(G.T, G)
             Gtd = np.dot(G.T, d)
-        iGtG = np.linalg.pinv(GtG, rcond=1.0e-8)
+        iGtG = self.inv_func(GtG)
 
         # Perform inversion
         if self.robust:
@@ -95,7 +102,7 @@ class RidgeRegression(LinearRegression):
     Simple ridge regression (L2-regularization on amplitudes).
     """
 
-    def __init__(self, reg_indices, penalty, regMat=None):
+    def __init__(self, reg_indices, penalty, regMat=None, **kwargs):
         """
         Initialize the RidgeRegression class and store regularization indices
         and regularization parameter.
@@ -107,7 +114,7 @@ class RidgeRegression(LinearRegression):
         penalty: float
             Regularization parameter.
         """
-        super().__init__()
+        super().__init__(**kwargs)
         self.reg_indices = reg_indices
         self.penalty = penalty
         self.regMat = regMat
@@ -150,7 +157,7 @@ class RidgeRegression(LinearRegression):
         else:
             GtG = np.dot(G.T, G)
             Gtd = np.dot(G.T, d)
-        iGtG = np.linalg.pinv(GtG + regMat, rcond=1.0e-8)
+        iGtG = self.inv_func(GtG + regMat)
         m = np.dot(iGtG, Gtd)
         return m, iGtG
 
@@ -161,7 +168,8 @@ class LassoRegression(LinearRegression):
     """
 
     def __init__(self, reg_indices, penalty, reweightingMethod='log',
-        rw_iter=5, regMat=None, estimate_uncertainty=False):
+                 rw_iter=5, regMat=None, estimate_uncertainty=False,
+                 **kwargs):
         """
         Initialize the LassoRegression class and store regularization indices,
         regularization parameter, and re-weighting method.
@@ -177,7 +185,7 @@ class LassoRegression(LinearRegression):
         rw_iter: int, optional
             Number of re-weighting operations. Default: 5.
         """
-        super().__init__()
+        super().__init__(**kwargs)
         self.reg_indices = np.array(reg_indices) 
         self.penalty = penalty
         self.eps = 1.0e-4
@@ -289,7 +297,7 @@ class LassoRegression(LinearRegression):
                 GtG = np.dot(Gsub.T, Gsub)
                 Gtd = np.dot(Gsub.T, d)
             # Do sub-set least squares
-            iGtG = np.linalg.pinv(GtG + 0.01*np.eye(nsub), rcond=1.0e-8)
+            iGtG = self.inv_func(GtG + 0.01*np.eye(nsub))
             m = np.dot(iGtG, Gtd)
             # Place in original locations
             x = np.zeros(n)
