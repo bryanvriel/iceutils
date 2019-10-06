@@ -30,6 +30,8 @@ def parse():
         help='Minimum number of observations to perform inversion. Default: 20.')
     parser.add_argument('-n_proc', action='store', type=int, default=1,
         help='Number of processors for multiprocessing. Default: 1.')
+    parser.add_argument('-no_weights', action='store_true',
+        help='Do not use data weights during the inversion.')
     parser.add_argument('-user', action='store', type=str, default='userCollection.py',
         help='Python file defining time function collection. Default: userCollection.py.')
     return parser.parse_args()
@@ -46,7 +48,7 @@ def main(args):
     # Launch solver
     ice.tseries.inversion(stack, args.user, args.outdir, nt_out=args.interp, dkey=args.dkey,
                           solver_type=args.solver, n_proc=args.n_proc, regParam=args.penalty,
-                          rw_iter=args.rw_iter, n_min=args.n_min)
+                          rw_iter=args.rw_iter, n_min=args.n_min, no_weights=args.no_weights)
     
 if __name__ == '__main__':
     # Parse command line arguments
