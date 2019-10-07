@@ -2,8 +2,13 @@
 
 import numpy as np
 from .boundary import Boundary, smoothe_line
+import os
 
-def load_glacier_boundaries(smooth=True, km=True, s=0.25):
+def load_glacier_boundaries(smooth=True, km=True, s=0.25, path=None):
+
+    # Head path
+    if path is None:
+        path = '/home/briel/data/jakobshavn/velocity/giant2'
 
     # Scale factor
     if km:
@@ -12,7 +17,7 @@ def load_glacier_boundaries(smooth=True, km=True, s=0.25):
         scale = 1.0
 
     # Load raw points for lower boundary
-    dat = np.load('/home/briel/data/jakobshavn/velocity/giant2/lower_boundary_points.npy')
+    dat = np.load(os.path.join(path, 'lower_boundary_points.npy'))
     lx, ly = dat[:,2], dat[:,3]
     lx *= scale
     ly *= scale
@@ -23,7 +28,7 @@ def load_glacier_boundaries(smooth=True, km=True, s=0.25):
     lower = Boundary(x=lx, y=ly)
 
     # Load raw points for lower boundary
-    dat = np.load('/home/briel/data/jakobshavn/velocity/giant2/upper_boundary_points.npy')
+    dat = np.load(os.path.join(path, 'upper_boundary_points.npy'))
     ux, uy = dat[:,2], dat[:,3]
     ux *= scale
     uy *= scale
@@ -141,7 +146,7 @@ def ocean_mask(hdr, path=None):
     mask = dem.data < 100.0
     return mask
 
-def sar_backscatter(hdr, smax=235.0, rgb=False):
+def sar_backscatter(hdr, smax=235.0, rgb=False, path=None, db=False):
     """
     Return array of SAR backscatter values for a given RasterInfo object. The source data 
     are from NSIDC GIMP:
@@ -150,7 +155,8 @@ def sar_backscatter(hdr, smax=235.0, rgb=False):
     from .raster import Raster
 
     # Load the raster
-    path = '/data0/briel/jakobshavn/imagery/S1_2018-08-01_2018-08-06_northwest_v02.1.tif'
+    if path is None:
+        path = '/data0/briel/jakobshavn/imagery/S1_2018-08-01_2018-08-06_northwest_v02.1.tif'
     slc = Raster(rasterfile=path)
 
     # Resample
@@ -164,6 +170,11 @@ def sar_backscatter(hdr, smax=235.0, rgb=False):
     if rgb:
         srgb = np.dstack((sdata, sdata, sdata, np.ones_like(sdata)))
         return srgb
+    elif db:
+        db = 10.0 * np.log10(sdata)
+        low = np.percentile(db.ravel(), 5)
+        high = np.percentile(db.ravel(), 99.9)
+        return db, low, high
     else:
         return sdata
 

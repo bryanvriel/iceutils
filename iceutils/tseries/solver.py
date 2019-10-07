@@ -159,14 +159,14 @@ def inversion_points(stack, userfile, x, y, solver_type='lsqr',
     # All done
     return results
 
-def butterworth(stack, a, b, outfile, n_proc=1):
+def butterworth(stack, a, b, fname_long, fname_short, n_proc=1):
 
-    # Instantiate and initialize output stack
+    # Instantiate and initialize output stacks
     shape = (stack.Nt, stack.Ny, stack.Nx)
-    ostack = Stack(outfile, mode='w')
-    ostack.initialize(stack.tdec, stack.hdr, data=False)
-    ostack.create_dataset('long_term', shape, dtype='f', chunks=(1, 128, 128))
-    ostack.create_dataset('short_term', shape, dtype='f', chunks=(1, 128, 128))
+    long_stack = Stack(fname_long, mode='w')
+    short_stack = Stack(fname_short, mode='w')
+    for ostack in (long_stack, short_stack):
+        ostack.initialize(stack.tdec, stack.hdr, data=True, weights=False)
 
     # Get list of chunks
     chunks = get_chunks(stack, 128, 128)
@@ -204,8 +204,8 @@ def butterworth(stack, a, b, outfile, n_proc=1):
                 results['short_term'][:,i,j] = d - d_filt
 
         # Save results in output stack
-        for key in ('long_term', 'short_term'):
-            ostack.set_chunk(islice, jslice, results[key], key=key)
+        for key, ostack in (('long_term', long_stack), ('short_term', short_stack)):
+            ostack.set_chunk(islice, jslice, results[key], key='data')
 
         # Timing diagnostics
         print('Finished chunk', islice, jslice, 'in %f sec' % (pytime.time() - t0))

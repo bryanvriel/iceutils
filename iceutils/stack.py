@@ -280,6 +280,9 @@ class MultiStack:
     def get_chunk(self, *args, **kwargs):
         raise NotImplementedError('Child classes must implement get_chunk function')
 
+    def __getitem__(self, key):
+        raise NotImplementedError('Child classes must implement __getitem__ function')
+
     def time_to_index(self, t, date=None):
         return self.stacks[0].time_to_index(t, date=date)
 
