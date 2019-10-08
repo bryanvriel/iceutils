@@ -40,7 +40,11 @@ def load_glacier_boundaries(smooth=True, km=True, s=0.25, path=None):
 
     return lower, upper
 
-def load_front(smooth=True, km=True, s=0.25):
+def load_front(smooth=True, km=True, s=0.25, path=None):
+
+    # Head path
+    if path is None:
+        path = '/data0/briel/topo/jakobshavn_32m'
    
     # Scale factor
     if km:
@@ -49,7 +53,7 @@ def load_front(smooth=True, km=True, s=0.25):
         scale = 1.0
 
     # Load raw points for lower boundary
-    dat = np.load('/data0/briel/topo/jakobshavn_32m/front_2017.npy')
+    dat = np.load(os.path.join(path, 'front_2017.npy'))
     x, y = dat[:,0], dat[:,1]
     x *= scale
     y *= scale
@@ -172,8 +176,9 @@ def sar_backscatter(hdr, smax=235.0, rgb=False, path=None, db=False):
         return srgb
     elif db:
         db = 10.0 * np.log10(sdata)
-        low = np.percentile(db.ravel(), 5)
-        high = np.percentile(db.ravel(), 99.9)
+        mask = np.isfinite(db.ravel())
+        low = np.percentile(db.ravel()[mask], 5)
+        high = np.percentile(db.ravel()[mask], 99.9)
         return db, low, high
     else:
         return sdata

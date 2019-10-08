@@ -16,7 +16,7 @@ from .model import build_temporal_model
 
 def inversion(stack, userfile, outdir, solver_type='lsqr', dkey='data',
               nt_out=200, n_proc=8, regParam=1.0, rw_iter=1, robust=False,
-              n_nonzero_coefs=10, n_min=20, no_weights=False):
+              n_nonzero_coefs=10, n_min=20, no_weights=False, mask_raster=None):
 
     # Create a time series model defined at the data points
     model, Cm = build_temporal_model(stack.tdec, userfile, cov=True)
@@ -27,6 +27,15 @@ def inversion(stack, userfile, outdir, solver_type='lsqr', dkey='data',
     # Create a time series model defined at equally spaced time points
     tfit = np.linspace(stack.tdec[0], stack.tdec[-1], nt_out)
     model = build_temporal_model(tfit, userfile, cov=False)
+
+    # Load a mask
+    if mask_raster is not None:
+        from ..raster import Raster
+        mrast = Raster(rasterfile=mask_raster)
+        mask = mrast.data.astype(bool)
+        del mrast
+    else:
+        mask = np.ones((stack.Ny, stack.Nx), dtype=bool)
 
     # Instantiate a solver
     solver = select_solver(solver_type, reg_indices=model.itransient, rw_iter=rw_iter,
@@ -56,10 +65,16 @@ def inversion(stack, userfile, outdir, solver_type='lsqr', dkey='data',
         else:
             wgts = stack.get_chunk(islice, jslice, key='weights')
         _, chunk_ny, chunk_nx = data.shape
-        npix = chunk_ny * chunk_nx
+        chunk_npix = chunk_ny * chunk_nx
+
+        # Mask out valid pixels in this chunk
+        chunk_mask = mask[islice, jslice]
+        data = data[:, chunk_mask]
+        wgts = wgts[:, chunk_mask]
+        npix = data.shape[1]
 
         # Create shared arrays for results
-        shape = (len(tfit), chunk_ny, chunk_nx)
+        shape = (len(tfit), npix)
         results = {}
         for key in ('full', 'secular', 'seasonal', 'transient', 'sigma'):
             results[key] = pymp.shared.array(shape, dtype=np.float32)
@@ -69,29 +84,30 @@ def inversion(stack, userfile, outdir, solver_type='lsqr', dkey='data',
             for index in manager.range(npix):
 
                 # Get time series
-                i, j = np.unravel_index(index, (chunk_ny, chunk_nx))
-                d = data[:,i,j]
-                w = wgts[:,i,j]
-                mask = np.isfinite(d)
-                nfinite = len(mask.nonzero()[0])
+                d = data[:,index]
+                w = wgts[:,index]
+                valid_mask = np.isfinite(d)
+                nfinite = len(valid_mask.nonzero()[0])
                 if nfinite < n_min:
                     continue
 
                 # Perform inversion
-                m, Cm = solver.invert(G[mask,:], d[mask], wgt=w[mask])
+                m, Cm = solver.invert(G[valid_mask,:], d[valid_mask], wgt=w[valid_mask])
 
                 # Compute prediction and store in arrays
                 pred = model.predict(m, sigma=False)
                 for key in ('full', 'secular', 'seasonal', 'transient'):
-                    results[key][:,i,j] = pred[key]
+                    results[key][:,index] = pred[key]
 
                 # Compute data prediction sigma manually
                 sigmaval = np.sqrt(np.diag(np.dot(model.G, np.dot(Cm, model.G.T))))
-                results['sigma'][:,i,j] = sigmaval
+                results['sigma'][:,index] = sigmaval
 
         # Save results in output stacks
         for key in ('full', 'secular', 'seasonal', 'transient', 'sigma'):
-            ostacks[key].set_chunk(islice, jslice, results[key])
+            rdata = np.zeros((len(tfit), chunk_ny, chunk_nx), dtype=np.float32)
+            rdata[:, chunk_mask] = results[key]
+            ostacks[key].set_chunk(islice, jslice, rdata)
 
         # Timing diagnostics
         print('Finished chunk', islice, jslice, 'in %f sec' % (pytime.time() - t0))
