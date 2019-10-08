@@ -8,6 +8,7 @@ from matplotlib.widgets import Slider
 from matplotlib.ticker import FormatStrFormatter
 import argparse
 import sys
+import os
 
 import iceutils as ice
 
@@ -39,6 +40,11 @@ def main(args):
 
     # Compute mean
     mean = np.nanmean(stack[args.key][()], axis=0)
+
+    # If model directory is given, load model stack (full fit)
+    mstack = None
+    if args.mdir is not None:
+        mstack = ice.Stack(os.path.join(args.mdir, 'interp_output_full.h5'))
 
     # Load reference SAR image
     if args.ref is not None:
@@ -80,7 +86,7 @@ def main(args):
         # Get time series for cursor location
         d = stack.timeseries(xy=(x, y), key=args.key)
         
-        # Plot data and long-term fit
+        # Plot data and fit
         axts.clear()
         if args.sigma:
             w = stack.timeseries(xy=(x, y), key='weights')
@@ -88,6 +94,11 @@ def main(args):
             axts.errorbar(stack.tdec, d, yerr=sigma, fmt='o')
         else:
             axts.plot(stack.tdec, d, 'o')
+
+        if mstack is not None:
+            fit = mstack.timeseries(xy=(x, y), key='data')
+            axts.plot(mstack.tdec, fit)
+
         axts.set_xlabel('Year')
         axts.set_ylabel('Velocity')
 
