@@ -14,15 +14,16 @@ from ..stack import Stack
 from .LinearRegression import *
 from .model import build_temporal_model
 
-def inversion(stack, userfile, outdir, solver_type='lsqr', dkey='data',
-              nt_out=200, n_proc=8, regParam=1.0, rw_iter=1, robust=False,
-              n_nonzero_coefs=10, n_min=20, no_weights=False, mask_raster=None):
+def inversion(stack, userfile, outdir, cleaned_stack=None,
+              solver_type='lsqr', dkey='data', nt_out=200, n_proc=8, regParam=1.0,
+              rw_iter=1, robust=False, n_nonzero_coefs=10, n_min=20, n_iter=5,
+              no_weights=False, mask_raster=None):
 
     # Create a time series model defined at the data points
-    model, Cm = build_temporal_model(stack.tdec, userfile, cov=True)
+    data_model, Cm = build_temporal_model(stack.tdec, userfile, cov=True)
     regMat = np.linalg.inv(Cm)
     # Cache the design matrix
-    G = model.G.copy()
+    G = data_model.G
 
     # Create a time series model defined at equally spaced time points
     tfit = np.linspace(stack.tdec[0], stack.tdec[-1], nt_out)
@@ -52,6 +53,12 @@ def inversion(stack, userfile, outdir, solver_type='lsqr', dkey='data',
         ostacks[key] = Stack(os.path.join(outdir, 'interp_output_%s.h5' % key), mode='w')
         ostacks[key].initialize(tfit, stack.hdr, chunks=(1, chunk_ny, chunk_nx))
 
+    # If user wishes to output data stack with outliers removed
+    if cleaned_stack is not None:
+        clean_stack = Stack(os.path.join(outdir, cleaned_stack), mode='w')
+        clean_stack.initialize(stack.tdec, stack.hdr, chunks=(1, chunk_ny, chunk_nx),
+                               data=True, weights=True)
+
     # Loop over chunks
     for islice, jslice in chunks:
 
@@ -59,19 +66,25 @@ def inversion(stack, userfile, outdir, solver_type='lsqr', dkey='data',
         t0 = pytime.time()
 
         # Get chunk of time series data and weights
-        data = stack.get_chunk(islice, jslice, key=dkey)
+        data2d = stack.get_chunk(islice, jslice, key=dkey)
         if no_weights:
-            wgts = np.ones_like(data)
+            wgts2d = np.ones_like(data2d)
         else:
-            wgts = stack.get_chunk(islice, jslice, key='weights')
-        _, chunk_ny, chunk_nx = data.shape
+            wgts2d = stack.get_chunk(islice, jslice, key='weights')
+        _, chunk_ny, chunk_nx = data2d.shape
         chunk_npix = chunk_ny * chunk_nx
 
-        # Mask out valid pixels in this chunk
+        # Extract valid pixels in this chunk into 1d arrays
         chunk_mask = mask[islice, jslice]
-        data = data[:, chunk_mask]
-        wgts = wgts[:, chunk_mask]
-        npix = data.shape[1]
+        data1d = data2d[:, chunk_mask]
+        wgts1d = wgts2d[:, chunk_mask]
+        npix = data1d.shape[1]
+
+        # Transfer to shared arrays
+        data = pymp.shared.array(data1d.shape, dtype=np.float32)
+        wgts = pymp.shared.array(wgts1d.shape, dtype=np.float32)
+        data[:, :] = data1d
+        wgts[:, :] = wgts1d
 
         # Create shared arrays for results
         shape = (len(tfit), npix)
@@ -91,8 +104,12 @@ def inversion(stack, userfile, outdir, solver_type='lsqr', dkey='data',
                 if nfinite < n_min:
                     continue
 
-                # Perform inversion
-                m, Cm = solver.invert(G[valid_mask,:], d[valid_mask], wgt=w[valid_mask])
+                # Perform inversion: iterative least squares with outlier detection
+                # Outliers are set to NaN in-place
+                m, Cm = iterate_lsqr(solver, data_model, G, d, w, n_iter=n_iter, n_min=n_min)
+                # Check if least squares failed
+                if m is None:
+                    continue
 
                 # Compute prediction and store in arrays
                 pred = model.predict(m, sigma=False)
@@ -109,11 +126,50 @@ def inversion(stack, userfile, outdir, solver_type='lsqr', dkey='data',
             rdata[:, chunk_mask] = results[key]
             ostacks[key].set_chunk(islice, jslice, rdata)
 
+        # Optional saving of cleaned stack
+        if cleaned_stack is not None:
+            # First transfer 1d arrays to original 2d chunks
+            data2d[:, chunk_mask] = data
+            wgts2d[:, chunk_mask] = wgts
+            # Write to output stack
+            clean_stack.set_chunk(islice, jslice, data2d, key='data')
+            clean_stack.set_chunk(islice, jslice, wgts2d, key='weights')
+
         # Timing diagnostics
         print('Finished chunk', islice, jslice, 'in %f sec' % (pytime.time() - t0))
 
     # All done
     return 
+
+def iterate_lsqr(solver, model, G, d, w, n_iter=5, n_std=3.0, n_min=20):
+    """
+    Iterative least squares to remove outliers.
+    """
+    for iternum in range(n_iter):
+    
+        # Fit
+        mask = np.isfinite(d)
+        dsub = d[mask]
+        if len(dsub) < n_min:
+            return None, None
+        m, Cm = solver.invert(G[mask], d[mask], wgt=w[mask])
+        pred = model.predict(m)
+
+        # Compute outliers
+        misfit = d - pred['full']
+        std = np.nanstd(misfit)
+        outliers = (np.abs(misfit) > (n_std * std)).nonzero()[0]
+        if len(outliers) < 1:
+            break
+        d[outliers] = np.nan
+        w[outliers] = np.nan
+
+    # Final least squares with no weights
+    mask = np.isfinite(d)
+    m, Cm = solver.invert(G[mask], d[mask])
+
+    # Done
+    return m, Cm
 
 def inversion_points(stack, userfile, x, y, solver_type='lsqr',
                      nt_out=200, n_proc=8, regParam=1.0, rw_iter=1, robust=False,
