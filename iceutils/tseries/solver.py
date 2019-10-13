@@ -164,10 +164,6 @@ def iterate_lsqr(solver, model, G, d, w, n_iter=5, n_std=3.0, n_min=20):
         d[outliers] = np.nan
         w[outliers] = np.nan
 
-    # Final least squares with no weights
-    mask = np.isfinite(d)
-    m, Cm = solver.invert(G[mask], d[mask])
-
     # Done
     return m, Cm
 
