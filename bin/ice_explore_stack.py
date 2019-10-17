@@ -49,9 +49,9 @@ def main(args):
     # Load reference SAR image
     if args.ref is not None:
         sar = ice.Raster(rasterfile=args.ref)
-        if sar.hdr != raster.hdr:
-            sar.resample(raster.hdr)
-        db = 10.0 * np.log10(sar.data)
+        if sar.hdr != stack.hdr:
+            sar.resample(stack.hdr)
+        db = 10.0 * np.log10(sar.data.astype(np.float32))
         low = np.percentile(db.ravel(), 5)
         high = np.percentile(db.ravel(), 99.9)
     else:
@@ -63,7 +63,7 @@ def main(args):
     cmap = ice.get_cmap(args.cmap)
     if db is not None:
         ref = ax.imshow(db, aspect='auto', cmap='gray', vmin=low, vmax=high,
-                        extent=raster.hdr.extent)
+                        extent=stack.hdr.extent)
     im = ax.imshow(mean, aspect='auto', vmin=vmin, vmax=vmax, cmap=cmap,
                    extent=stack.hdr.extent, alpha=args.alpha)
 

@@ -326,7 +326,21 @@ class RasterInfo:
         """
         Return matplotlib-compatible extent of (left, right, bottom, top).
         """
-        return (self.xstart, self.xstop, self.ystop, self.ystart)
+        return np.array([self.xstart, self.xstop, self.ystop, self.ystart])
+
+    @property
+    def xlim(self):
+        """
+        Return matplotlib-compatible x-limits (left, right).
+        """
+        return np.array([self.xstart, self.xstop])
+
+    @property
+    def ylim(self):
+        """
+        Return matplotlib-compatible y-limits (bottom, top).
+        """
+        return np.array([self.ystop, self.ystart])
 
     @property
     def xcoords(self):

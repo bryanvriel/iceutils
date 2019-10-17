@@ -16,7 +16,7 @@ from .model import build_temporal_model
 
 def inversion(stack, userfile, outdir, cleaned_stack=None,
               solver_type='lsqr', dkey='data', nt_out=200, n_proc=8, regParam=1.0,
-              rw_iter=1, robust=False, n_nonzero_coefs=10, n_min=20, n_iter=5,
+              rw_iter=1, robust=False, n_nonzero_coefs=10, n_min=20, n_iter=1,
               no_weights=False, mask_raster=None):
 
     # Create a time series model defined at the data points
