@@ -13,12 +13,9 @@ pymp
 scikit-learn
 tqdm
 ```
-With the exception of `pykml` and `pymp`, all of the packages can be installed via Anaconda using their main channel. `pykml` can be installed using the `conda-forge` channel, e.g.:
+With the exception of `pykml` and `pymp`, all of the packages can be installed via Anaconda using their main channel. Both `pykml` and `pymp` can be installed with pip:
 ```
-conda install -c conda-forge pykml
-```
-Also, `pymp` can be installed with pip:
-```
+pip install pykml
 pip install pymp-pypi
 ```
 
