@@ -9,6 +9,8 @@ gdal
 h5py
 pyproj
 pykml
+scikit-learn
+tqdm
 ```
 
 To install `iceutils`, first, clone the repository:
