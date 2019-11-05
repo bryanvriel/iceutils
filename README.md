@@ -9,6 +9,14 @@ gdal
 h5py
 pyproj
 pykml
+pymp
+scikit-learn
+tqdm
+```
+With the exception of `pykml` and `pymp`, all of the packages can be installed via Anaconda using their main channel. Both `pykml` and `pymp` can be installed with pip:
+```
+pip install pykml
+pip install pymp-pypi
 ```
 
 To install `iceutils`, first, clone the repository:
