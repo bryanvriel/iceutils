@@ -227,13 +227,17 @@ class LassoRegression(LinearRegression):
         arrflag = isinstance(self.penalty, np.ndarray)
         weightingFunc = self.weightingFunc
 
+        # Cache original input design matrix and data vector
+        G_input = G.copy()
+        d_input = d.copy()
+
         # If weight array provided, pre-multiply design matrix and data
         if wgt is not None:
             G = dmultl(wgt, G)
             d = wgt * d
 
         # If a regularization matrix (prior covariance matrix) has been provided
-        # convert G -> GtG and d -> Gtd
+        # convert G -> GtG and d -> Gtd (Gram products)
         if self.regMat is not None:
             d = np.dot(G.T, d)
             G = np.dot(G.T, G) + self.regMat
@@ -286,24 +290,28 @@ class LassoRegression(LinearRegression):
         # Estimate uncertainty or set to identity
         if self.estimate_uncertainty:
             # Get indices for variance reduction
-            best_ind = self._selectBestBasis(np.array(A), x, d)
-            Gsub = np.array(A)[:,best_ind]
-            nsub = Gsub.shape[1]
+            best_ind = self._selectBestBasis(G_input, x, d_input)
+            Gsub = G_input[:, best_ind]
+            dsub = d_input
             # Compute new linear algebra arrays
             if wgt is not None:
-                GtG = np.dot(Gsub.T, dmultl(wgt**2, Gsub))
-                Gtd = np.dot(Gsub.T, wgt**2 * d)
+                Gsub = dmultl(wgt, Gsub)
+                dsub = d_input * wgt
+            if self.regMat is not None:
+                regMat = self.regMat[best_ind,:][:,best_ind]
+                GtG = np.dot(Gsub.T, Gsub) + regMat
             else:
                 GtG = np.dot(Gsub.T, Gsub)
-                Gtd = np.dot(Gsub.T, d)
-            # Do sub-set least squares
-            iGtG = self.inv_func(GtG + 0.01*np.eye(nsub))
+            Gtd = np.dot(Gsub.T, dsub)
+            # Inverse and least squares
+            iGtG = self.inv_func(GtG)
             m = np.dot(iGtG, Gtd)
             # Place in original locations
             x = np.zeros(n)
             Cm = np.zeros((n,n))
             x[best_ind] = m
-            Cm[best_ind,best_ind] = np.diag(iGtG)
+            row, col = np.meshgrid(best_ind, best_ind)
+            Cm[row, col] = iGtG
         else:
             Cm = np.eye(n)
 
@@ -363,38 +371,38 @@ class LassoRegression(LinearRegression):
         variance = np.std(dat)**2
         varianceReduction = 1.0 - variance / refVariance
 
+        # Extract dictionary elements to traverse (regularized elements)
+        G_reg = G[:, reg_ind]
+        m_reg = m[reg_ind]
+
         # Sort the transient components of m from highest to lowest
-        sortIndices = np.argsort(np.abs(m[reg_ind]))[::-1]
-        sortIndices = reg_ind[sortIndices]
+        sortIndices = np.argsort(np.abs(m_reg))[::-1]
 
         # Loop over components and compute variance reduction
         bestIndices = steady_ind.tolist()
         cnt = 0
         ref_var_reduction = varianceReduction
         delta_reduction = 100.0
-        while varianceReduction < varThresh:
+        while cnt < len(reg_ind):
 
             # Get the model fit for this component
             index = sortIndices[cnt]
-            fit = np.dot(G[:,index], m[index])
+            fit = np.dot(G_reg[:,index], m_reg[index])
 
             # Remove from data
             dat -= fit
             variance = np.std(dat)**2
             varianceReduction = 1.0 - variance / refVariance
-
-            # Check if we're not getting any better
-            delta_reduction = varianceReduction - ref_var_reduction
-            if delta_reduction < 1.0e-6:
-                break
-            ref_var_reduction = varianceReduction
-
-            bestIndices.append(index)
-            cnt += 1
+            bestIndices.append(reg_ind[index])
 
             #print(varianceReduction)
-            #print(index, m[index])
 
+            # Check if we've met threshold
+            if varianceReduction >= varThresh:
+                print('Breaking due to threshold')
+                break
+            cnt += 1
+            
         return bestIndices
 
 
