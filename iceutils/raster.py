@@ -436,6 +436,11 @@ def interpolate_array(array, hdr, x, y, ref_hdr=None, order=3):
     if ref_hdr is not None:
         x, y = ref_hdr.meshgrid()
 
+    # Check if scalars are passed
+    if not isinstance(x, np.ndarray):
+        x = np.array([x])
+        y = np.array([y])
+
     # Ravel points to 1D
     row = (y.ravel() - hdr.ystart) / hdr.dy
     col = (x.ravel() - hdr.xstart) / hdr.dx
