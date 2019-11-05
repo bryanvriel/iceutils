@@ -29,10 +29,11 @@ def inversion(stack, userfile, outdir, cleaned_stack=None,
     tfit = np.linspace(stack.tdec[0], stack.tdec[-1], nt_out)
     model = build_temporal_model(tfit, userfile, cov=False)
 
-    # Load a mask
+    # Load a mask and resample to stack geometry
     if mask_raster is not None:
         from ..raster import Raster
         mrast = Raster(rasterfile=mask_raster)
+        mrast.resample(stack.hdr, order=0)
         mask = mrast.data.astype(bool)
         del mrast
     else:
