@@ -30,6 +30,11 @@ class Boundary:
         self._y *= value
         self._init_path()
 
+    def reverse(self):
+        self._x = self._x[::-1]
+        self._y = self._y[::-1]
+        self._init_path()
+
     def contains_points(self, x, y):
         """
         Check if point resides within boundary.
