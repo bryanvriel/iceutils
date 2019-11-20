@@ -4,6 +4,8 @@ import numpy as np
 from scipy.interpolate import UnivariateSpline, interp1d
 import sys
 
+from .utilities import *
+
 class Basal:
 
     def __init__(self, n=3, m=3, rho_ice=917.0, rho_water=1024.0):

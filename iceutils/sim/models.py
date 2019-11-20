@@ -284,5 +284,4 @@ class LateralIceStream:
         return np.einsum('ij,i->ij', A, b)
 
 
-
 # end of file
