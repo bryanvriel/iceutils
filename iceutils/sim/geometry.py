@@ -118,6 +118,7 @@ class Profile:
         ax1, ax2 = axes
         ax1.plot(self.x, self.b)
         ax1.plot(self.x, self.s)
+        ax1.plot(self.x, self.HAF)
         ax2.plot(self.x, self.u)
         for ax in axes:
             ax.grid(True, linestyle=':')
@@ -181,7 +182,7 @@ def construct_finite_diff_matrix(x, edge_order=2):
     # Done
     return D
 
-def refine_grid(x, U, thresh=5.0, num_iter=10, verbose=False):
+def refine_grid(x, U, thresh=5.0, dx_min=10.0, num_iter=10, verbose=False):
     """
     Refine a grid by the gradient of the velocity field.
     """
@@ -204,7 +205,9 @@ def refine_grid(x, U, thresh=5.0, num_iter=10, verbose=False):
             dU_next = dU[i]
 
             # Check criteria
-            if dU_next > thresh:
+            if (x[i+1] - x[i]) <= (2*dx_min):
+                x_new.append(x[i+1])
+            elif dU_next > thresh:
                 x_new.extend([0.5 * (x[i+1] + x[i]), x[i+1]])
             else:
                 x_new.append(x[i+1])
