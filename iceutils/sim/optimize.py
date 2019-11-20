@@ -4,15 +4,13 @@ import numpy as np
 from scipy import optimize
 import sys
 
-def find_root(profile, model, method='newton', n_iter=500, tol=1.0e-5, reltol=1.0e-10,
-              options=None):
+def find_root(profile, model, method='newton', n_iter=500, tol=1.0e-5, options=None):
     """
     Wrapper for various root-finding optimization algorithms. For any method other than 'newton',
     it calls scipy.optimize.root.
     """
     if method == 'newton':
-        U, F = _find_root_newton(profile, model, n_iter=n_iter, tol=tol, reltol=reltol,
-                                 **options)
+        U, F = _find_root_newton(profile, model, n_iter=n_iter, tol=tol, **options)
     else:
         result = optimize.root(model.compute_pde_values, profile.u,
                                jac=model.compute_jacobian, method=method,
@@ -23,7 +21,8 @@ def find_root(profile, model, method='newton', n_iter=500, tol=1.0e-5, reltol=1.
     # Done
     return U, F
 
-def _find_root_newton(profile, model, n_iter=500, tol=1.0e-5, reltol=1.0e-10, delta=0.2):
+def _find_root_newton(profile, model, n_iter=500, tol=1.0e-5, reltol=1.0e-10, delta=0.2,
+                      rcond=1.0e-10):
     """
     Implements Newton's method for finding the roots of a multivariate function. Function
     is provided by model.compute_pde_values().
@@ -54,7 +53,7 @@ def _find_root_newton(profile, model, n_iter=500, tol=1.0e-5, reltol=1.0e-10, de
         J = model.compute_jacobian(U)
 
         # Compute update vector
-        dU = np.linalg.lstsq(J, -F, rcond=1.0e-10)[0]
+        dU = np.linalg.lstsq(J, -F, rcond=rcond)[0]
 
         # Update velocities
         U += delta * dU
