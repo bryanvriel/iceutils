@@ -69,16 +69,27 @@ class Profile:
         if u is not None:
             self.u = u
 
-    def update_coordinates(self, x, interp_kind='cubic'):
+    def update_coordinates(self, x, interp_kind='cubic', extrapolate=False):
         """
         Creates a NEW Profile object with a new set of coordinates.
         """
+        # Handle extrapolation arguments
+        if extrapolate:
+            fill_value = 'extrapolate'
+            bounds_error = False
+        else:
+            fill_value = np.nan
+            bounds_error = True
+
         # Create new object with interpolated profiles
         return Profile(
             x,
-            interp1d(self.x, self.h, kind=interp_kind)(x),
-            interp1d(self.x, self.b, kind=interp_kind)(x),
-            interp1d(self.x, self.u, kind=interp_kind)(x),
+            interp1d(self.x, self.h, kind=interp_kind, fill_value=fill_value,
+                     bounds_error=bounds_error)(x),
+            interp1d(self.x, self.b, kind=interp_kind, fill_value=fill_value,
+                     bounds_error=bounds_error)(x),
+            interp1d(self.x, self.u, kind=interp_kind, fill_value=fill_value,
+                     bounds_error=bounds_error)(x),
         )
 
     def flotation_criteria(self):
