@@ -274,7 +274,7 @@ def create_flat_bed(x, b0=-500.0):
     b = b0 * np.ones_like(x)
     return b
 
-def create_surface_profile(x, x_pin=50.0e3, s0=1000.0, amp=750.0):
+def create_surface_profile(x, x_pin=50.0e3, s0=1000.0, amp=750.0, smoothing_win=40):
 
     # Flat profile leading into logarithmic decay
     s = s0 * np.ones_like(x)
@@ -285,7 +285,7 @@ def create_surface_profile(x, x_pin=50.0e3, s0=1000.0, amp=750.0):
     s[sub_mask] = ssub
 
     # Smoothe the line
-    s = smoothe_line(x, s, win_size=40)
+    s = smoothe_line(x, s, win_size=smoothing_win)
 
     return s
 
