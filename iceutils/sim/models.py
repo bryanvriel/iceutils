@@ -166,7 +166,7 @@ class LateralIceStream:
         self.F = np.zeros(self.profile.N + 2)
         self.J = np.zeros((self.profile.N + 2, self.profile.N))
 
-    def compute_pde_values(self, u, scale=1.0e-2):
+    def compute_pde_values(self, u, scale=1.0e-2, return_components=False):
 
         # Cache some parameters to use here
         g, n, m, W, A, As, mu = [
@@ -197,11 +197,17 @@ class LateralIceStream:
         # Lateral drag
         lateral_drag = scale * 2 * usign * h / W * (5 * absu / (A * W))**(1 / n)
 
-        # Combine resistive stresses
-        membrane -= (basal_drag + lateral_drag)
-
         # Driving stress
         Td = scale * self.rho_ice * g * h * alpha
+
+        # At this point, return individual components if requested
+        if return_components:
+            cdict = {'membrane': membrane, 'basal': basal_drag,
+                     'lateral': lateral_drag, 'driving': Td}
+            return cdict
+
+        # Combine resistive stresses
+        membrane -= (basal_drag + lateral_drag)
 
         # Fill out the PDE vector, including boundary values
         self.F[:-2] = membrane + Td
