@@ -8,8 +8,11 @@ import sys
 from .utilities import *
 
 class IceStream:
+    """
+    Simplest model for basal sliding only.
+    """
     
-    def __init__(self, profile, calving_force, A, B2=6.0e2, n=3, m=1):
+    def __init__(self, profile, calving_force, A, cb=6.0e2, n=3, m=3):
 
         # Save the profile object
         self.profile = profile
@@ -17,7 +20,7 @@ class IceStream:
         # Physical parameters
         self.A = A
         self.g = 9.80665
-        self.B2 = B2
+        self.cb = cb
         self.n = n
         self.m = m
         self.rho_ice = profile.rho_ice
@@ -29,6 +32,7 @@ class IceStream:
         # Epsilon value when computing the effective viscosity
         # When grid cell size gets smaller, this should also be smaller to ensure stability
         self.nu_eps = 1.0e-8
+        self.drag_eps = 1.0e-8
 
         # The forc at the calving front
         self.fs = calving_force
@@ -58,7 +62,9 @@ class IceStream:
         membrane = scale * 2.0 * np.dot(D, h * nu * Du)
 
         # Basal drag
-        drag = scale * self.B2 * u
+        absu = np.abs(u)
+        usign = np.copysign(np.ones_like(u), u)
+        drag = scale * usign * self.cb * (absu + self.drag_eps)**(1.0 / m)
 
         # Driving stress
         Td = scale * self.rho_ice * g * h * alpha
@@ -96,11 +102,17 @@ class IceStream:
         J2 = self.gradient_product(h * nu, D)
         J_membrane = scale * np.dot(self.K, J1 + J2)
 
-        # Jacobian for sliding drag
-        J_drag = scale * self.B2 * np.eye(u.size)
+        # Jacobian for sliding drag (diagonal)
+        absu = np.abs(u)
+        usign = np.copysign(np.ones_like(u), u)
+        J_drag = scale * self.cb * usign**2 / m * (absu + self.drag_eps)**((1 - m) / m)
+
+        # Subtract drag Jacobian from diagonal of membrane stress Jacobian
+        N = u.size
+        J_membrane[range(N), range(N)] -= J_drag
 
         # Fill out full Jacobian
-        self.J[:-2,:] = J_membrane - J_drag
+        self.J[:-2,:] = J_membrane
         self.J[-2,:] = self.boundary_value_scale * D[0,:]
         self.J[-1,:] = self.boundary_value_scale * D[-1,:]
 
