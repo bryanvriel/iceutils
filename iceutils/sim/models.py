@@ -44,7 +44,7 @@ class IceStream:
         self.F = np.zeros(self.profile.N + 2)
         self.J = np.zeros((self.profile.N + 2, self.profile.N))
 
-    def compute_pde_values(self, u, scale=1.0e-2):
+    def compute_pde_values(self, u, scale=1.0e-2, return_components=False):
 
         # Cache some parameters to use here
         g, n, m, A = [getattr(self, attr) for attr in ('g', 'n', 'm', 'A')]
@@ -68,6 +68,11 @@ class IceStream:
 
         # Driving stress
         Td = scale * self.rho_ice * g * h * alpha
+
+        if return_components:
+            return {'membrane': membrane,
+                    'drag': drag,
+                    'driving': Td}
 
         # Fill out the PDE vector, including boundary values
         self.F[:-2] = membrane - drag + Td
