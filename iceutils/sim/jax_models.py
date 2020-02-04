@@ -68,8 +68,8 @@ class IceStream:
         # Basal drag
         absu = np.abs(u)
         usign = u / absu
-        #drag = scale * usign * self.cb * absu**(1.0 / m)
-        drag = scale * usign * self.cb * (self.Hf * absu)**(1.0 / m)
+        basal = scale * usign * self.cb * absu**(1.0 / m)
+        #basal = scale * usign * self.cb * (self.Hf * absu)**(1.0 / m)
 
         # Driving stress
         Td = scale * self.rho_ice * g * h * alpha
@@ -77,7 +77,7 @@ class IceStream:
         # Optionally return individual stress components
         if return_components:
             return {'membrane': membrane,
-                    'drag': drag,
+                    'basal': basal,
                     'driving': Td}
 
         # Compute boundary conditions
@@ -85,7 +85,7 @@ class IceStream:
         b2 = self.boundary_value_scale * (Du[-1] - self.fs)
 
         # Fill out PDE residual array
-        stress = membrane - drag + Td
+        stress = membrane - basal + Td
         F1 = jax.ops.index_update(F, slice(0, N), stress)
         F2 = jax.ops.index_update(F1, slice(N, N + 2), [b1, b2])
 
