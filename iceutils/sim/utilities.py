@@ -1,6 +1,6 @@
 #-*- coding: utf-8 -*-
 
-import numpy as np
+import jax.numpy as np
 
 def load_profile_from_h5(h5file):
     """
