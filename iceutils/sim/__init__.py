@@ -2,7 +2,8 @@
 
 # Import everything into a common namespace
 from .geometry import *
-from .models import *
+#from .models import *
+from .jax_models import *
 from .utilities import *
 from .forces import *
 from .optimize import *

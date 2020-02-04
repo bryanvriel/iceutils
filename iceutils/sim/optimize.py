@@ -1,6 +1,6 @@
 #-*- coding: utf-8 -*-
 
-import numpy as np
+import jax.numpy as np
 from scipy import optimize
 import sys
 
@@ -23,8 +23,14 @@ def find_root(profile, model, method='newton', n_iter=500, tol=1.0e-5, scale=1.0
     # Done
     return U, F
 
-def _find_root_newton(profile, model, n_iter=500, tol=1.0e-5, scale=1.0e-2,
-                      reltol=1.0e-10, delta=0.2, rcond=1.0e-10):
+def _find_root_newton(profile,
+                      model,
+                      n_iter=500,
+                      tol=1.0e-5,
+                      scale=1.0e-2,
+                      reltol=1.0e-10,
+                      delta=0.2,
+                      reg_param=1.0e-10):
     """
     Implements Newton's method for finding the roots of a multivariate function. Function
     is provided by model.compute_pde_values().
@@ -32,6 +38,9 @@ def _find_root_newton(profile, model, n_iter=500, tol=1.0e-5, scale=1.0e-2,
     # Initial velocity and pde values
     U = profile.u.copy()
     F_prev = model.compute_pde_values(U)
+
+    # Damping matrix
+    regmat = reg_param * np.eye(U.size)
 
     # Begin iterations
     for i in range(n_iter):
@@ -55,10 +64,21 @@ def _find_root_newton(profile, model, n_iter=500, tol=1.0e-5, scale=1.0e-2,
         J = model.compute_jacobian(U, scale=scale)
 
         # Compute update vector
-        dU = np.linalg.lstsq(J, -F, rcond=rcond)[0]
+        JtJ = np.dot(J.T, J) + regmat
+        JtF = np.dot(J.T, F)
+        iJtJ = np.linalg.inv(JtJ)
+        dU = np.dot(iJtJ, -1.0*JtF)
+
+        #JtJ = np.dot(J.T, J)
+        #regmat = reg_param * np.clip(np.diag(JtJ), 0.0, 50000.0)
+        #JtF = np.dot(J.T, F)
+        #iJtJ = np.linalg.inv(JtJ + regmat)
+        #dU = np.dot(iJtJ, -1.0*JtF)
 
         # Update velocities
         U += delta * dU
         F_prev = F
 
     return U, F
+
+# end of file
