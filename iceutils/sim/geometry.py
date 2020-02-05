@@ -2,7 +2,7 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.interpolate import UnivariateSpline, interp1d
+from scipy.interpolate import UnivariateSpline, interp1d, InterpolatedUnivariateSpline
 import sys
 
 class Profile:
@@ -92,9 +92,30 @@ class Profile:
                      bounds_error=bounds_error)(x),
         )
 
-    def flotation_criteria(self):
+    def update_terminus(self, pad=5):
         """
-        Computes flotation criteria.
+        Updates terminus position to satisfy flotation criterion.
+        """
+        # Compute flotation criterion
+        f = self.flotation_criterion()
+
+        # Check for retreat
+        if f[-1] < 0.0:
+            new_profile = retreat_terminus(self)
+        
+        # Check for advance
+        else:
+            new_profile = advance_terminus(self, pad=pad)
+            # Take another corrective retreat
+            if new_profile.HAF[-1] < 0.0:
+                new_profile = retreat_terminus(new_profile)
+
+        # Return new profile
+        return new_profile
+
+    def flotation_criterion(self):
+        """
+        Computes flotation criterion (height above flotation).
         """
         flotation = self.rho_ice * self.h - self.rho_water * self.depth
         return flotation
@@ -102,10 +123,10 @@ class Profile:
     def subset_grounded(self, float_eps=0.0, return_mask=False):
         """
         Return a new Profile object subset to where ice thicknesses are above
-        a flotation criteria.
+        a flotation criterion.
         """
         # Compute the flotation matrix
-        flotation = self.flotation_criteria()
+        flotation = self.flotation_criterion()
 
         # Mask
         mask = flotation > float_eps
@@ -215,7 +236,7 @@ def refine_grid(x, U, thresh=5.0, dx_min=10.0, num_iter=10, verbose=False):
             # Get corresponding change in velocities to next grid cell
             dU_next = dU[i]
 
-            # Check criteria
+            # Check criterion
             if (x[i+1] - x[i]) <= (2*dx_min):
                 x_new.append(x[i+1])
             elif dU_next > thresh:
@@ -317,5 +338,82 @@ def make_line(x, x1, y1, x2, y2):
     C = y1 - slope * x1
     line = slope * x + C
     return line
+
+def advance_terminus(profile, pad=5):
+    """
+    Advances terminus position to satisfy height above flotation criterion.
+    """
+
+    # Extract last <pad> points of profile
+    x_origin = profile.x[-1]
+    x_term = profile.x[-pad:] - x_origin
+    h_term = profile.HAF[-pad:]
+
+    # Fit quadratic to these points
+    phi = np.polyfit(x_term, h_term, 2)
+
+    # Compute the roots
+    roots = quadratic_roots(phi)
+    # Keep the one closest to zero
+    argmin = np.argmin(np.abs(roots))
+    x_zero = roots[argmin] + x_origin
+    print('New terminus at', x_zero)
+
+    # Compute rough number of extra grid points to add
+    n_add = int(np.round((x_zero - x_origin) / profile.dx))
+    print('Advancing %d cells' % n_add)
+
+    # Create new grid of x points
+    x_new = np.linspace(profile.x[0], x_zero, profile.N + n_add)
+
+    # Check if we need to add an extra point
+    if (x_new[1] - x_new[0]) > 430.0:
+        x_new = np.linspace(profile.x[0], x_zero, profile.N + n_add + 1)
+
+    # Create new profile
+    new_profile = profile.update_coordinates(x_new, extrapolate=True)
+    new_profile.t = profile.t
+    print('New spacing:', new_profile.dx)
+
+    return new_profile
+
+def retreat_terminus(profile):
+    """
+    Retreats terminus position to satisfy height above flotation criterion.
+    """
+    # Create spline representation of HAF
+    spline = InterpolatedUnivariateSpline(profile.x, profile.HAF)
+
+    # Find roots
+    roots = spline.roots()
+    assert len(roots) == 1, 'Found multiple zero crossings of HAF'
+    x_zero = roots[0]
+
+    # Compute rough number of grid points to remove
+    n_remove = int(np.round((profile.x[-1] - x_zero) / profile.dx))
+    print('Retreating %d cells' % n_remove)
+
+    # Create new grid of x points
+    x_new = np.linspace(profile.x[0], x_zero, profile.N - n_remove)
+
+    # Check if we need to remove an extra point
+    if (x_new[1] - x_new[0]) < 370.0:
+        x_new = np.linspace(profile.x[0], x_zero, profile.N - n_remove - 1)
+
+    # Create new profile
+    new_profile = profile.update_coordinates(x_new, extrapolate=False)
+    new_profile.t = profile.t
+    print('New spacing:', new_profile.dx)
+
+    return new_profile
+
+def quadratic_roots(phi):
+    """
+    Computes roots of a quadratic polynomial.
+    """
+    a, b, c = phi
+    r1 = (-b + np.sqrt(b**2 - 4*a*c)) / (2*a)
+    r2 = (-b - np.sqrt(b**2 - 4*a*c)) / (2*a)
+    return r1, r2
 
 # end of file
