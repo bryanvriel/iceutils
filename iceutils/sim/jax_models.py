@@ -69,7 +69,6 @@ class IceStream:
         absu = np.abs(u)
         usign = u / absu
         basal = scale * usign * self.cb * absu**(1.0 / m)
-        #basal = scale * usign * self.cb * (self.Hf * absu)**(1.0 / m)
 
         # Driving stress
         Td = scale * self.rho_ice * g * h * alpha
