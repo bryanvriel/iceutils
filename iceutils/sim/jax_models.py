@@ -13,7 +13,7 @@ class IceStream:
     Simplest model for basal sliding only.
     """
     
-    def __init__(self, profile, calving_force, A, cb=6.0e2, n=3, m=3):
+    def __init__(self, profile, calving_force, A, cb=6.0e2, n=3, m=3, bv_scale=500.0):
 
         # Save the profile object
         self.profile = profile
@@ -28,7 +28,7 @@ class IceStream:
         self.rho_water = profile.rho_water
 
         # Numerical parameters
-        self.boundary_value_scale = 500.0
+        self.boundary_value_scale = bv_scale
 
         # Epsilon value when computing the effective viscosity
         # When grid cell size gets smaller, this should also be smaller to ensure stability
