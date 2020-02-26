@@ -144,14 +144,26 @@ class Profile:
         else: 
             return profile
 
-    def plot(self, axes=None):
+    def plot(self, axes=None, items=['geo', 'vel']):
         if axes is None:
-            fig, axes = plt.subplots(nrows=2, figsize=(10,6))
-        ax1, ax2 = axes
-        ax1.plot(self.x, self.b)
-        ax1.plot(self.x, self.s)
-        ax1.plot(self.x, self.HAF)
-        ax2.plot(self.x, self.u)
+            fig, axes = plt.subplots(nrows=len(items), figsize=(10,6))
+        else:
+            assert len(axes) == len(items), 'Incompatible number of subplots'
+        for count, item in enumerate(items):
+            ax = axes[count]
+            if item == 'geo':
+                ax.plot(self.x, self.b)
+                ax.plot(self.x, self.s)
+                ax.plot(self.x, self.HAF)
+            elif item == 'vel':
+                ax.plot(self.x, self.u)
+            elif item == 'flux':
+                flux = self.h * self.u
+                dflux = np.gradient(flux, self.x)
+                ax.plot(self.x, flux)
+                ax_twin = ax.twinx()
+                ax_twin.plot(self.x, dflux, 'r')
+
         for ax in axes:
             ax.grid(True, linestyle=':')
         plt.tight_layout()
