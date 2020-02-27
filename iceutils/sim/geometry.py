@@ -379,7 +379,8 @@ def advance_terminus(profile, pad=5):
     x_new = np.linspace(profile.x[0], x_zero, profile.N + n_add)
 
     # Check if we need to add an extra point
-    if (x_new[1] - x_new[0]) > 430.0:
+    dx_thresh = profile.dx + 0.05 * profile.dx
+    if (x_new[1] - x_new[0]) > dx_thresh:
         x_new = np.linspace(profile.x[0], x_zero, profile.N + n_add + 1)
 
     # Create new profile
@@ -409,7 +410,8 @@ def retreat_terminus(profile):
     x_new = np.linspace(profile.x[0], x_zero, profile.N - n_remove)
 
     # Check if we need to remove an extra point
-    if (x_new[1] - x_new[0]) < 370.0:
+    dx_thresh = profile.dx - 0.05 * profile.dx
+    if (x_new[1] - x_new[0]) < dx_thresh:
         x_new = np.linspace(profile.x[0], x_zero, profile.N - n_remove - 1)
 
     # Create new profile
