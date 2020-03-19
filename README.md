@@ -12,6 +12,7 @@ pykml
 pymp
 scikit-learn
 tqdm
+cvxopt
 ```
 With the exception of `pykml` and `pymp`, all of the packages can be installed via Anaconda using their main channel. Both `pykml` and `pymp` can be installed with pip:
 ```
