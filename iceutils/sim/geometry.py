@@ -399,7 +399,8 @@ def retreat_terminus(profile):
 
     # Find roots
     roots = spline.roots()
-    assert len(roots) == 1, 'Found multiple zero crossings of HAF'
+    if len(roots) > 1:
+        raise ValueError('Found multiple zero crossings of HAF')
     x_zero = roots[0]
 
     # Compute rough number of grid points to remove
