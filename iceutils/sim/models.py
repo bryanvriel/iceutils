@@ -5,8 +5,6 @@ import matplotlib.pyplot as plt
 from scipy.interpolate import UnivariateSpline, interp1d
 import sys
 
-from .utilities import *
-
 class IceStream:
     """
     Simplest model for basal sliding only.
@@ -31,8 +29,7 @@ class IceStream:
 
         # Epsilon value when computing the effective viscosity
         # When grid cell size gets smaller, this should also be smaller to ensure stability
-        self.nu_eps = 1.0e-8
-        self.drag_eps = 1.0e-8
+        self.nu_eps = 1.0e-6
 
         # The forc at the calving front
         self.fs = calving_force
@@ -63,8 +60,8 @@ class IceStream:
 
         # Basal drag
         absu = np.abs(u)
-        usign = np.copysign(np.ones_like(u), u)
-        drag = scale * usign * self.cb * (absu + self.drag_eps)**(1.0 / m)
+        usign = u / absu
+        drag = scale * usign * self.cb * absu**(1.0 / m)
 
         # Driving stress
         Td = scale * self.rho_ice * g * h * alpha

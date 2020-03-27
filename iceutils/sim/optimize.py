@@ -1,8 +1,14 @@
 #-*- coding: utf-8 -*-
 
-import jax.numpy as np
+# Get numpy
+try:
+    from .jax_models import np
+except ImportError:
+    from .models import np
+
 from scipy import optimize
 import sys
+
 
 def find_root(profile, model, method='newton', n_iter=500, tol=1.0e-5, scale=1.0e-2,
               options=None):
@@ -30,7 +36,8 @@ def _find_root_newton(profile,
                       scale=1.0e-2,
                       reltol=1.0e-10,
                       delta=0.2,
-                      reg_param=1.0e-10):
+                      reg_param=1.0e-10,
+                      verbose=True):
     """
     Implements Newton's method for finding the roots of a multivariate function. Function
     is provided by model.compute_pde_values().
@@ -50,7 +57,7 @@ def _find_root_newton(profile,
         Fmag = np.linalg.norm(F)
 
         # Diagnostics
-        if i % 50 == 0:
+        if i % 50 == 0 and verbose:
             print('Iteration %03d error: %8.5e' % (i, Fmag))
 
         # Check convergence
