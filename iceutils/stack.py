@@ -48,12 +48,6 @@ class Stack:
 
         return
 
-#     def __del__(self):
-#         """
-#         Close HDF5 dataset.
-#         """
-#         if self.fid is not None:
-#             self.fid.close()
 
     def initialize(self, tdec, raster_info, data=True, weights=False, chunks=(1, 128, 128)):
         """
