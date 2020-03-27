@@ -1,7 +1,5 @@
 #-*- coding: utf-8 -*-
 
-import jax.numpy as np
-
 def load_profile_from_h5(h5file):
     """
     Creates a Profile object using data from an HDF5 output run
@@ -40,9 +38,11 @@ def AGlen_vs_temp(T, KPa=False):
     """
     Copied from Hilmar's Ua code, but cat return in units of {a^-1} {Pa^-3}
     """
+    import math
+
     T = T + 273.15
     a0 = 5.3e-15 * 365.25 * 24. * 60. * 60. # a-1 kPa-3
-    fa = 1.2478766e-39 * np.exp(0.32769 * T) + 1.9463011e-10 * np.exp(0.07205 * T)
+    fa = 1.2478766e-39 * math.exp(0.32769 * T) + 1.9463011e-10 * math.exp(0.07205 * T)
     AGlen = a0 * fa
 
     if KPa:

@@ -6,8 +6,6 @@ from scipy.interpolate import UnivariateSpline, interp1d
 import jax
 import sys
 
-from .utilities import *
-
 class IceStream:
     """
     Simplest model for basal sliding only.

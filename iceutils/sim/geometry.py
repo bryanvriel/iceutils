@@ -1,9 +1,15 @@
 #-*- coding: utf-8 -*-
 
-import numpy as np
+# Get numpy
+try:
+    from .jax_models import np
+except ImportError:
+    from .models import np
+
 import matplotlib.pyplot as plt
 from scipy.interpolate import UnivariateSpline, interp1d, InterpolatedUnivariateSpline
 import sys
+
 
 class Profile:
 
@@ -172,11 +178,14 @@ class Profile:
 def construct_finite_diff_matrix(x, edge_order=2):
     """     
     Construct finite difference matrix operator using central differences.
-    """         
+    """
+    # Need standard numpy
+    import numpy
+      
     # Non-uniform grid spacing
     N = x.size
-    dx = np.diff(x)
-    D = np.zeros((N, N))
+    dx = numpy.diff(x)
+    D = numpy.zeros((N, N))
                 
     # Off-diagonals for central difference
     dx1 = dx[:-1]
