@@ -161,7 +161,7 @@ class IceStream:
         # Jacobian for sliding drag (diagonal)
         absu = np.abs(u)
         usign = np.copysign(np.ones_like(u), u)
-        J_drag = scale * self.cb * usign**2 / m * (absu + self.drag_eps)**((1 - m) / m)
+        J_drag = scale * self.cb * usign**2 / m * absu**((1 - m) / m)
 
         # Subtract drag Jacobian from diagonal of membrane stress Jacobian
         N = u.size
@@ -245,7 +245,6 @@ class LateralIceStream:
         # Epsilon value when computing the effective viscosity
         # When grid cell size gets smaller, this should also be smaller to ensure stability
         self.nu_eps = 1.0e-8
-        self.drag_eps = 1.0e-3
 
         # The force at the calving front
         self.fs = calving_force
@@ -420,7 +419,7 @@ class LateralIceStream:
 
     
 
-def gradient_product(self, b, A):
+def gradient_product(b, A):
     """
     Helper function for returning the equivalent of the product:
 
