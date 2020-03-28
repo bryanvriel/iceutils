@@ -6,12 +6,35 @@ import sys
 class CalvingForce:
     """
     Encapsulates a time-varying forcing function at calving front.
+
+    Parameters
+    ----------
+    A: float
+        Glen's Flow Law parameter in {a^-1} {Pa^-3}.
+    n: int, optional
+        Glen's Flow Law exponent. Default: 3.
+    fs: function, optional
+        Reference to function for time-dependent fs value.
+    mode: {'constant', 'periodic', 'step'}, optional
+        Selection of pre-supported fs functions. Default: 'constant'.
+    cval: float, optional
+        Value for constant fs. Default: 1.0.
+    period: float, optional
+        Value for periodic function period in years. Default: 1.0.
+    amplitude: float, optional
+        Value for periodic function amplitude. Default: 0.5.
+    rho_ice: float, optional
+        Ice density in kg/m^3. Default: 917.0.
+    rho_water: float, optional
+        Ocean water density in kg/m^3. Default: 1024.0
+    g: float, optional
+        Gravitational acceleration in m/s^2. Default: 9.80665.
     """
 
     def __init__(self, A, n=3, fs=None, mode='constant', cval=1.0, period=1.0, amplitude=0.5,
                  rho_ice=917.0, rho_water=1024.0, g=9.80665):
         """
-        Store parameters.
+        Initialize CalvingForce.
         """
         self.A = A
         self.n = n
@@ -34,6 +57,18 @@ class CalvingForce:
     def __call__(self, t, h):
         """
         Evaluate force at a given time and height of calving front.
+
+        Parameters
+        ----------
+        t: float
+            Time value to evaluate fs function.
+        h: float
+            Terminus ice thickness at current time value.
+
+        Returns
+        -------
+        F: float
+            Total force at calving front.
         """
         # Evaluate the force value
         fs = self.fs(t)

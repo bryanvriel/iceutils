@@ -5,13 +5,35 @@ import matplotlib.pyplot as plt
 from scipy.interpolate import UnivariateSpline, interp1d
 import sys
 
+
 class IceStream:
     """
-    Simplest model for basal sliding only.
+    1-D flowline model for basal sliding, e.g.
+
+    membrane_stress + basal_drag = driving_stress
+
+    Parameters
+    ----------
+    profile: iceutils.sim.Profile
+        Profile instance.
+    calving_force: iceutils.sim.CalvingForce
+        CalvingForce instance.
+    A: float
+        Glen's Flow Law parameter in {a^-1} {Pa^-3}.
+    cb: float, optional
+        Sliding law prefactor. Default: 6.0e2.
+    n: int, optional
+        Glen's Flow Law exponent. Default: 3.
+    m: int, optional
+        Sliding law exponent. Default: 3.
+    bv_scale: float, optional
+        Scale factor for boundary conditions. Default: 500.0.
     """
     
     def __init__(self, profile, calving_force, A, cb=6.0e2, n=3, m=3, bv_scale=500.0):
-
+        """
+        Initialize IceStream class.
+        """
         # Save the profile object
         self.profile = profile
 
@@ -42,7 +64,25 @@ class IceStream:
         self.J = np.zeros((self.profile.N + 2, self.profile.N))
 
     def compute_pde_values(self, u, scale=1.0e-2, return_components=False):
+        """
+        Compute vector of PDE residuals for a given velocity profile.
 
+        Parameters
+        ----------
+        u: (N,) ndarray
+            Array of ice velocity in m/yr.
+        scale: float, optional
+            Value for scaling PDE residuals. Default: 1.0e-2.
+        return_components: bool, optional
+            If True, return individual stress components in a dictionary.
+
+        Returns
+        -------
+        F: (N+2,) ndarray
+            Array of PDE residuals. Returned if return_components = False.
+        stress_dict: dict
+            Dictionary of individual stress components. Returned if return_components = True.
+        """
         # Cache some parameters to use here
         g, n, m, A = [getattr(self, attr) for attr in ('g', 'n', 'm', 'A')]
 
@@ -80,7 +120,21 @@ class IceStream:
         return self.F.copy()
 
     def compute_jacobian(self, u, scale=1.0e-2):
+        """
+        Compute Jacobian of residual array with respect to a given velocity array.
+        
+        Parameters
+        ----------
+        u: (N,) ndarray
+            Array of ice velocity in m/yr.
+        scale: float, optional
+            Value for scaling PDE residuals. Default: 1.0e-2.
 
+        Returns
+        -------
+        J: (N+2, N+2) ndarray
+            2D Jacobian array.
+        """
         # Cache some parameters to use here
         g, n, m = [getattr(self, attr) for attr in ('g', 'n', 'm')]
 
@@ -97,11 +151,11 @@ class IceStream:
         nu_hat = (n - 1) / n * Du / (np.abs(Du)**((n + 1) / n) + self.nu_eps)
 
         # Jacobian related to | du/dx | ** ((1 -n) / n)
-        Gp = self.gradient_product(-1.0 * (nu**2) * nu_hat, D)
+        Gp = gradient_product(-1.0 * (nu**2) * nu_hat, D)
 
         # Composite Jacobian related to membrane stresses
-        J1 = self.gradient_product(h * Du, Gp)
-        J2 = self.gradient_product(h * nu, D)
+        J1 = gradient_product(h * Du, Gp)
+        J2 = gradient_product(h * nu, D)
         J_membrane = scale * np.dot(self.K, J1 + J2)
 
         # Jacobian for sliding drag (diagonal)
@@ -124,26 +178,54 @@ class IceStream:
         """
         Computes finite difference approximation to the Jacobian. Not intended to be used
         for simulation runs since it's quite slow, but it's useful for debugging.
+
+        Parameters
+        ----------
+        u: (N,) ndarray
+            Array of ice velocity in m/yr.
+        step: float, optional
+            Step size for finite differences. Default: 1.0e-7.
+
+        Returns
+        -------
+        J: (N+2, N+2) ndarray
+            2D Jacobian array.
         """
         import numdifftools as nd
         jacfun = nd.Jacobian(self.compute_pde_values, step=step)
         return jacfun(u)
 
-    def gradient_product(self, b, A):
-        """
-        Returns the equivalent of the product:
-
-        (I .* outer(b, 1s)) * A
-
-        but using the faster einsum operation.
-        """
-        return np.einsum('ij,i->ij', A, b)
-
 
 class LateralIceStream:
-    
-    def __init__(self, profile, calving_force, A, W=3000.0, As=100.0, mu=1.0, n=3, m=3):
+    """
+    1-D flowline model for basal sliding, e.g.
 
+    membrane_stress + basal_drag = driving_stress
+
+    Parameters
+    ----------
+    profile: iceutils.sim.Profile
+        Profile instance.
+    calving_force: iceutils.sim.CalvingForce
+        CalvingForce instance.
+    A: float
+        Glen's Flow Law parameter {a^-1} {Pa^-3}.
+    W: float, optional
+        Width of glacier in meters. Default: 3000.0.
+    mu: float, optional
+        Frictional prefactor for sliding law. Default: 100.0.
+    n: int, optional
+        Glen's Flow Law exponent. Default: 3.
+    m: int, optional
+        Sliding law exponent. Default: 3.
+    bv_scale: float, optional
+        Scale factor for boundary conditions. Default: 500.0.
+    """
+    
+    def __init__(self, profile, calving_force, A, W=3000.0, mu=100.0, n=3, m=3, bv_scale=500.0):
+        """
+        Initialize LateralIceStream class.
+        """
         # Save the profile object
         self.profile = profile
 
@@ -151,7 +233,6 @@ class LateralIceStream:
         self.W = W                  # FULL width of glacier
         self.A = A
         self.g = 9.80665
-        self.As = As
         self.mu = mu
         self.n = n
         self.m = m
@@ -159,7 +240,7 @@ class LateralIceStream:
         self.rho_water = profile.rho_water
 
         # Numerical parameters
-        self.boundary_value_scale = 500.0
+        self.boundary_value_scale = bv_scale
 
         # Epsilon value when computing the effective viscosity
         # When grid cell size gets smaller, this should also be smaller to ensure stability
@@ -181,11 +262,28 @@ class LateralIceStream:
         self.J = np.zeros((self.profile.N + 2, self.profile.N))
 
     def compute_pde_values(self, u, scale=1.0e-2, return_components=False):
+        """
+        Parameters
+        ----------
+        u: (N,) ndarray
+            Array of ice velocity in m/yr.
+        scale: float, optional
+            Value for scaling PDE residuals. Default: 1.0e-2.
+        return_components: bool, optional
+            If True, return individual stress components in a dictionary.
+
+        Returns
+        -------
+        F: (N+2,) ndarray
+            Array of PDE residuals. Returned if return_components = False.
+        stress_dict: dict
+            Dictionary of individual stress components. Returned if return_components = True.
+        """
 
         # Cache some parameters to use here
-        g, n, m, W, A, As, mu = [
+        g, n, m, W, A, mu = [
             getattr(self, attr) for attr in 
-            ('g', 'n', 'm', 'W', 'A', 'As', 'mu')
+            ('g', 'n', 'm', 'W', 'A', 'mu')
         ]
 
         # Cache some variables from the profile
@@ -206,7 +304,7 @@ class LateralIceStream:
         # Basal drag
         absu = np.abs(u)
         usign = np.copysign(np.ones_like(u), u)
-        basal_drag = scale * usign * mu * As * (self.Hf * absu)**(1 / m)
+        basal_drag = scale * usign * mu * (self.Hf * absu)**(1 / m)
 
         # Lateral drag
         lateral_drag = scale * 2 * usign * h / W * (5 * absu / (A * W))**(1 / n)
@@ -232,11 +330,26 @@ class LateralIceStream:
         return self.F.copy()
 
     def compute_jacobian(self, u, scale=1.0e-2):
+        """
+        Compute Jacobian of residual array with respect to a given velocity array.
+        
+        Parameters
+        ----------
+        u: (N,) ndarray
+            Array of ice velocity in m/yr.
+        scale: float, optional
+            Value for scaling PDE residuals. Default: 1.0e-2.
+
+        Returns
+        -------
+        J: (N+2, N+2) ndarray
+            2D Jacobian array.
+        """
 
         # Cache some parameters to use here
-        g, n, m, W, A, As, mu = [
+        g, n, m, W, A, mu = [
             getattr(self, attr) for attr in 
-            ('g', 'n', 'm', 'W', 'A', 'As', 'mu')
+            ('g', 'n', 'm', 'W', 'A', 'mu')
         ]
 
         # Cache some variables from the profile
@@ -255,17 +368,17 @@ class LateralIceStream:
         nu_hat = (n - 1) / n * Du / (np.abs(Du)**((n + 1) / n) + self.nu_eps)
 
         # Jacobian related to | du/dx | ** ((1 -n) / n)
-        Gp = self.gradient_product(-1.0 * (nu**2) * nu_hat, D)
+        Gp = gradient_product(-1.0 * (nu**2) * nu_hat, D)
 
         # Composite Jacobian related to membrane stresses
-        J1 = self.gradient_product(h * Du, Gp)
-        J2 = self.gradient_product(h * nu, D)
+        J1 = gradient_product(h * Du, Gp)
+        J2 = gradient_product(h * nu, D)
         Jpde = scale * np.dot(self.K, J1 + J2)
 
         # Jacobian for sliding drag (diagonal)
         absu = np.abs(u)
         usign = np.copysign(np.ones_like(u), u)
-        J_basal = (scale * mu * usign * As * (self.Hf * usign) / 
+        J_basal = (scale * mu * usign * (self.Hf * usign) / 
                    m * (self.Hf * absu)**((1 - m) / m))
         
         # Jacobian for lateral drag (diagonal)
@@ -288,20 +401,33 @@ class LateralIceStream:
         """
         Computes finite difference approximation to the Jacobian. Not intended to be used
         for simulation runs since it's quite slow, but it's useful for debugging.
+
+        Parameters
+        ----------
+        u: (N,) ndarray
+            Array of ice velocity in m/yr.
+        step: float, optional
+            Step size for finite differences. Default: 1.0e-7.
+
+        Returns
+        -------
+        J: (N+2, N+2) ndarray
+            2D Jacobian array.
         """
         import numdifftools as nd
         jacfun = nd.Jacobian(self.compute_pde_values, step=step)
         return jacfun(u)
 
-    def gradient_product(self, b, A):
-        """
-        Returns the equivalent of the product:
+    
 
-        (I .* outer(b, 1s)) * A
+def gradient_product(self, b, A):
+    """
+    Helper function for returning the equivalent of the product:
 
-        but using the faster einsum operation.
-        """
-        return np.einsum('ij,i->ij', A, b)
+    (I .* outer(b, 1s)) * A
 
+    but using the faster einsum operation.
+    """
+    return np.einsum('ij,i->ij', A, b)
 
 # end of file
