@@ -8,10 +8,32 @@ import sys
 
 class IceStream:
     """
-    Simplest model for basal sliding only.
+    1-D flowline model for basal sliding, e.g.
+
+    membrane_stress + basal_drag = driving_stress
+    
+    Parameters
+    ----------
+    profile: iceutils.sim.Profile
+        Profile instance.
+    calving_force: iceutils.sim.CalvingForce
+        CalvingForce instance.
+    A: float
+        Glen's Flow Law parameter in {a^-1} {Pa^-3}.
+    cb: float, optional
+        Sliding law prefactor. Default: 6.0e2.
+    n: int, optional 
+        Glen's Flow Law exponent. Default: 3.
+    m: int, optional
+        Sliding law exponent. Default: 3.
+    bv_scale: float, optional
+        Scale factor for boundary conditions. Default: 500.0.
     """
     
     def __init__(self, profile, calving_force, A, cb=6.0e2, n=3, m=3, bv_scale=500.0):
+        """
+        Initialize IceStream class.
+        """
 
         # Save the profile object
         self.profile = profile
@@ -44,6 +66,25 @@ class IceStream:
         self.fjac = jax.jacfwd(self.compute_pde_values, 0)
 
     def compute_pde_values(self, u, scale=1.0e-2, return_components=False):
+        """
+        Compute vector of PDE residuals for a given velocity profile.
+        
+        Parameters
+        ----------
+        u: (N,) ndarray
+            Array of ice velocity in m/yr.
+        scale: float, optional
+            Value for scaling PDE residuals. Default: 1.0e-2.
+        return_components: bool, optional
+            If True, return individual stress components in a dictionary.
+
+        Returns
+        ------- 
+        F: (N+2,) ndarray
+            Array of PDE residuals. Returned if return_components = False.
+        stress_dict: dict
+            Dictionary of individual stress components. Returned if return_components = True.
+        """
 
         # Cache some parameters to use here
         g, n, m, A = [getattr(self, attr) for attr in ('g', 'n', 'm', 'A')]
@@ -90,6 +131,21 @@ class IceStream:
         return F2
 
     def compute_jacobian(self, u, scale=1.0e-2):
+        """ 
+        Compute Jacobian of residual array with respect to a given velocity array.
+                    
+        Parameters
+        ----------
+        u: (N,) ndarray
+            Array of ice velocity in m/yr.
+        scale: float, optional
+            Value for scaling PDE residuals. Default: 1.0e-2.
+        
+        Returns
+        -------
+        J: (N+2, N+2) ndarray
+            2D Jacobian array.
+        """
         # Pass arguments to jacobian function
         J = self.fjac(u, scale=scale)
         # Done
@@ -97,9 +153,35 @@ class IceStream:
 
 
 class LateralIceStream:
+    """
+    1-D flowline model for basal sliding, e.g.
+
+    membrane_stress + basal_drag = driving_stress
+
+    Parameters
+    ----------
+    profile: iceutils.sim.Profile
+        Profile instance.
+    calving_force: iceutils.sim.CalvingForce
+        CalvingForce instance.
+    A: float
+        Glen's Flow Law parameter {a^-1} {Pa^-3}.
+    W: float, optional
+        Width of glacier in meters. Default: 3000.0.
+    mu: float, optional
+        Frictional prefactor for sliding law. Default: 100.0.
+    n: int, optional
+        Glen's Flow Law exponent. Default: 3.
+    m: int, optional
+        Sliding law exponent. Default: 3.
+    bv_scale: float, optional
+        Scale factor for boundary conditions. Default: 500.0.
+    """
     
     def __init__(self, profile, calving_force, A, W=3000.0, As=100.0, mu=1.0, n=3, m=3):
-
+        """
+        Initialize LateralIceStream class.
+        """
         # Save the profile object
         self.profile = profile
 
@@ -133,6 +215,23 @@ class LateralIceStream:
         self.fjac = jax.jacfwd(self.compute_pde_values, 0)
 
     def compute_pde_values(self, u, scale=1.0e-2, return_components=False):
+        """
+        Parameters
+        ----------
+        u: (N,) ndarray
+            Array of ice velocity in m/yr.
+        scale: float, optional
+            Value for scaling PDE residuals. Default: 1.0e-2.
+        return_components: bool, optional
+            If True, return individual stress components in a dictionary.
+
+        Returns
+        -------
+        F: (N+2,) ndarray
+            Array of PDE residuals. Returned if return_components = False.
+        stress_dict: dict
+            Dictionary of individual stress components. Returned if return_components = True.
+        """
 
         # Cache some parameters to use here
         g, n, m, W, A, As, mu = [
@@ -188,6 +287,21 @@ class LateralIceStream:
         return F2
         
     def compute_jacobian(self, u, scale=1.0e-2):
+        """
+        Compute Jacobian of residual array with respect to a given velocity array.
+        
+        Parameters
+        ----------
+        u: (N,) ndarray
+            Array of ice velocity in m/yr.
+        scale: float, optional
+            Value for scaling PDE residuals. Default: 1.0e-2.
+
+        Returns
+        -------
+        J: (N+2, N+2) ndarray
+            2D Jacobian array.
+        """
         # Pass arguments to jacobian function
         J = self.fjac(u, scale=scale)
         # Done

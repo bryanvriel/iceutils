@@ -6,6 +6,7 @@ try:
 except ImportError:
     from .models import np
 
+# Other packages
 import matplotlib.pyplot as plt
 from scipy.interpolate import UnivariateSpline, interp1d, InterpolatedUnivariateSpline
 import sys
@@ -21,6 +22,27 @@ class Profile:
             s = L -> glacier terminus
 
         and ice thickness and bed elevation below sea level.
+
+        Parameters
+        ----------
+        x: (N,) ndarray
+            Array of downstream coordinates in meters.
+        h: (N,) ndarray
+            Array of ice thickness in meters.
+        b: (N,) ndarray
+            Array of bed elevation in meters.
+        u: (N,) ndarray
+            Array of ice velocity in m/yr.
+        rho_ice: float, optional
+            Ice density in kg/m^3. Default: 917.
+        rho_water: float, optional
+            Ocean water density in kg/m^3. Default: 1024.
+        t: float, optional
+            Time associated with profile data.
+
+        Returns
+        -------
+        None
         """
         # Store the data
         self.x = x
@@ -60,6 +82,19 @@ class Profile:
     def set_profile_ydata(self, h=None, b=None, u=None):
         """
         Update thickness profiles for height, bed, and velocity.
+
+        Parameters
+        ----------
+        h: (N,) ndarray
+            Array of ice thickness in meters.
+        b: (N,) ndarray
+            Array of bed elevation in meters.
+        u: (N,) ndarray
+            Array of ice velocity in m/yr.
+        
+        Returns
+        -------
+        None
         """
         # Height
         if h is not None:
@@ -78,6 +113,20 @@ class Profile:
     def update_coordinates(self, x, interp_kind='cubic', extrapolate=False):
         """
         Creates a NEW Profile object with a new set of coordinates.
+
+        Parameters
+        ----------
+        x: (N,) ndarray
+            Array of downstream coordinates in meters to interpolate to.
+        interp_kind: str, optional
+            scipy.interp1d kwarg for interpolation kind. Default: 'cubic'.
+        extrapolate: bool, optional
+            Flag for extrapolation beyond x bounds. Default: False.
+
+        Returns
+        -------
+        profile: Profile
+            New Profile instance.
         """
         # Handle extrapolation arguments
         if extrapolate:
@@ -101,6 +150,19 @@ class Profile:
     def update_terminus(self, pad=5, verbose=False):
         """
         Updates terminus position to satisfy flotation criterion.
+
+        Parameters
+        ----------
+        pad: int, optional
+            Number of grid cells near terminus to use for linear fit for extrapolation.
+            Default: 5.
+        verobse: bool, optional
+            Print out diagnostic messages. Default: False.
+
+        Returns
+        -------
+        profile: Profile
+            New Profile instance.
         """
         # Compute flotation criterion
         f = self.flotation_criterion()
@@ -122,6 +184,14 @@ class Profile:
     def flotation_criterion(self):
         """
         Computes flotation criterion (height above flotation).
+        
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        flotation: float
         """
         flotation = self.rho_ice * self.h - self.rho_water * self.depth
         return flotation
@@ -130,6 +200,19 @@ class Profile:
         """
         Return a new Profile object subset to where ice thicknesses are above
         a flotation criterion.
+
+        Parameters
+        ----------
+        float_eps: float, optional
+            Maximum height above flotation to be considered floating. Default: 0.0.
+        return_mask: bool, optional
+
+        Returns
+        -------
+        profile: Profile
+            New Profile instance.
+        mask: ndarray
+            Flotation mask used for subsetting. Returns if return_mask = True.
         """
         # Compute the flotation matrix
         flotation = self.flotation_criterion()
@@ -151,6 +234,20 @@ class Profile:
             return profile
 
     def plot(self, axes=None, items=['geo', 'vel']):
+        """
+        Construct subplots for viewing various profile data.
+
+        Parameters
+        ----------
+        axes: pyplot.axes.Axes, optional
+            Pre-constructed axes to plot into.
+        items: list, optional
+            List of items to plot. Choose from ['geo', 'vel', 'flux'].
+        
+        Returns
+        -------
+        None
+        """
         if axes is None:
             fig, axes = plt.subplots(nrows=len(items), figsize=(10,6))
         else:
@@ -175,9 +272,85 @@ class Profile:
         plt.tight_layout()
         plt.show()
 
+
+# --------------------------------------------------------------------------------
+# Utility functions
+# --------------------------------------------------------------------------------
+
+def load_profile_from_h5(h5file):
+    """
+    Creates a Profile object using data from an HDF5 output run
+
+    Parameters
+    ----------
+    h5file: str
+        Name of HDF5 file to load data from.
+
+    Returns
+    -------
+    profile: Profile
+        New Profile instance.
+    """
+    import h5py
+    from .geometry import Profile
+
+    with h5py.File(h5file, 'r') as fid:
+        u, h, b, x = [fid[key][()] for key in ('u', 'h', 'b', 'x')]
+        profile = Profile(x, h, b, u)
+        if 't' in fid.keys():
+            profile.t = fid['t'][()]
+        else:
+            profile.t = 0.0
+    return profile
+
+def save_profile_to_h5(profile, h5file, aux_data={}):
+    """
+    Saves a Profile object to HDF5.
+
+    Parameters
+    ----------
+    profile: Profile
+        Profile instance to save.
+    h5file: str
+        HDF5 file to write to.
+    aux_data: dict, optional
+        Dict of any additional data to write to HDF5.
+
+    Returns
+    -------
+    None
+    """
+    import h5py
+    with h5py.File(h5file, 'w') as fid:
+
+        # Save standard profile data
+        for key in ('u', 'h', 'b', 'x'):
+            fid[key] = getattr(profile, key)
+        if hasattr(profile, 't'):
+            fid['t'] = profile.t
+
+        # If any extra data has been provided, save those as Datasets
+        for key, value in aux_data.items():
+            fid[key] = value
+
+    return
+
 def construct_finite_diff_matrix(x, edge_order=2):
     """     
     Construct finite difference matrix operator using central differences.
+    
+    Parameters
+    ----------
+    x: (N,) ndarray
+        Array of coordinates.
+    edge_order: {1, 2}, optional
+        Gradient is calculated using N-th order accurate differences at boundaries.
+        Default: 1.
+
+    Returns
+    -------
+    D: (N, N) ndarray
+        2D array for finite difference operator.
     """
     # Need standard numpy
     import numpy
@@ -237,7 +410,25 @@ def construct_finite_diff_matrix(x, edge_order=2):
 
 def refine_grid(x, U, thresh=5.0, dx_min=10.0, num_iter=10, verbose=False):
     """
-    Refine a grid by the gradient of the velocity field.
+    Refine a grid (modify its spacing) by the gradient of the velocity field.
+
+    Parameters
+    ----------
+    x: (N,) ndarray
+        Array of downstream coordinates in meters.
+    U: (N,) ndarray
+        Array of ice velocity in m/yr.
+    thresh: float, optional
+        Velocity threshold (m/yr) for splitting cell into multiple cells. Default: 5.0.
+    dx_min: float, optional
+        Minimum cell size in meters. Default: 10.0.
+    verbose: bool, optional
+        Display diagnostics.
+
+    Returns
+    -------
+    x: (M,) ndarray
+        New array of downstream coordinates.
     """
     # Compute initial diff
     dU = np.diff(U)
@@ -285,6 +476,179 @@ def refine_grid(x, U, thresh=5.0, dx_min=10.0, num_iter=10, verbose=False):
 
     return x
     
+def smoothe_line(x, y, win_size=20):
+    """
+    Use rollowing window to smoothe a 1D profile.
+
+    Parameters
+    ----------
+    x: (N,) ndarray
+        X values for profile.
+    y: (N,) ndarray
+        Y values for profile.
+    win_size: int, optional
+        Rolling window size in number of elements. Default: 20.
+    
+    Returns
+    -------
+    y: (N,) ndarray
+        Smoothed Y values.
+    """
+    import pandas as pd
+
+    # First create spline representation
+    spline = UnivariateSpline(x, y, s=0.001, ext='extrapolate')
+
+    # Extend coordinates to account for smoothing window
+    dx = x[1] - x[0]
+    x_pad_begin = x[0] - dx - dx * np.arange(win_size)
+    x_pad_end = x[-1] + dx + dx * np.arange(win_size)
+    x = np.hstack((x_pad_begin[::-1], x, x_pad_end))
+
+    # Extrapolate segment
+    y = spline(x)
+
+    # Use pandas to do a rolling window smoothing to smoothe corners
+    df = pd.DataFrame({'B': y})
+    df_filt = df.rolling(win_size, win_type='triang', center=True).sum()
+    y = df_filt.values.squeeze() / (0.5 * win_size)
+
+    return y[slice(win_size, -win_size)]
+
+def advance_terminus(profile, pad=5, verbose=False):
+    """
+    Advances terminus position with extrapolation to satisfy height above flotation criterion.
+
+    Parameters
+    ----------
+    profile: Profile
+        Profile to advance.
+    pad: int, optional
+        Number of grid cells near terminus to use for linear fit for extrapolation.
+        Default: 5.
+    verobse: bool, optional
+        Print out diagnostic messages. Default: False.
+       
+    Returns
+    -------
+    new_profile: Profile
+        New Profile instance. 
+    """
+
+    # Extract last <pad> points of profile
+    x_origin = profile.x[-1]
+    x_term = profile.x[-pad:] - x_origin
+    h_term = profile.HAF[-pad:]
+
+    # Fit quadratic to these points
+    phi = np.polyfit(x_term, h_term, 2)
+
+    # Compute the roots
+    roots = quadratic_roots(phi)
+    # Keep the one closest to zero
+    argmin = np.argmin(np.abs(roots))
+    x_zero = roots[argmin] + x_origin
+
+    # Compute rough number of extra grid points to add
+    n_add = int(np.round((x_zero - x_origin) / profile.dx))
+    if verbose:
+        print('New terminus at', x_zero)
+        print('Advancing %d cells' % n_add)
+
+    # Create new grid of x points
+    x_new = np.linspace(profile.x[0], x_zero, profile.N + n_add)
+
+    # Check if we need to add an extra point
+    dx_thresh = profile.dx + 0.05 * profile.dx
+    if (x_new[1] - x_new[0]) > dx_thresh:
+        x_new = np.linspace(profile.x[0], x_zero, profile.N + n_add + 1)
+
+    # Create new profile
+    new_profile = profile.update_coordinates(x_new, extrapolate=True)
+    new_profile.t = profile.t
+    if verbose:
+        print('New spacing:', new_profile.dx)
+
+    return new_profile
+
+def retreat_terminus(profile, verbose=False):
+    """
+    Retreats terminus position with interpolation to satisfy height above flotation criterion.
+
+    Parameters
+    ----------
+    profile: Profile
+        Profile to advance.
+    verobse: bool, optional
+        Print out diagnostic messages. Default: False.
+       
+    Returns
+    -------
+    new_profile: Profile
+        New Profile instance.
+    """
+    # Create spline representation of HAF
+    spline = InterpolatedUnivariateSpline(profile.x, profile.HAF)
+
+    # Find roots
+    roots = spline.roots()
+    if len(roots) > 1:
+        raise ValueError('Found multiple zero crossings of HAF')
+    x_zero = roots[0]
+
+    # Compute rough number of grid points to remove
+    n_remove = int(np.round((profile.x[-1] - x_zero) / profile.dx))
+    if verbose:
+        print('Retreating %d cells' % n_remove)
+
+    # Create new grid of x points
+    x_new = np.linspace(profile.x[0], x_zero, profile.N - n_remove)
+
+    # Check if we need to remove an extra point
+    dx_thresh = profile.dx - 0.05 * profile.dx
+    if (x_new[1] - x_new[0]) < dx_thresh:
+        x_new = np.linspace(profile.x[0], x_zero, profile.N - n_remove - 1)
+
+    # Create new profile
+    new_profile = profile.update_coordinates(x_new, extrapolate=False)
+    new_profile.t = profile.t
+    if verbose:
+        print('New spacing:', new_profile.dx)
+
+    return new_profile
+
+def quadratic_roots(phi):
+    """
+    Computes roots of a quadratic polynomial given its coefficients.
+
+    Parameters
+    ----------
+    phi: (3,) array_like
+        Polynomial coefficients, highest power first.
+
+    Returns
+    -------
+    r1: float
+        First root.
+    r2: float
+        Second root.
+    """
+    a, b, c = phi
+    r1 = (-b + np.sqrt(b**2 - 4*a*c)) / (2*a)
+    r2 = (-b - np.sqrt(b**2 - 4*a*c)) / (2*a)
+    return r1, r2
+
+
+# --------------------------------------------------------------------------------
+# Various debugging routines
+# --------------------------------------------------------------------------------
+
+def make_line(x, x1, y1, x2, y2):
+    slope = (y2 - y1) / (x2 - x1)
+    C = y1 - slope * x1
+    line = slope * x + C
+    return line
+
 def create_sinusoidal_bed_profile(x):
    
     xt = 75.0e3 
@@ -331,117 +695,5 @@ def create_surface_profile(x, x_pin=50.0e3, s0=1000.0, amp=750.0, smoothing_win=
 
     return s
 
-def smoothe_line(x, y, win_size=20):
-
-    import pandas as pd
-
-    # First create spline representation
-    spline = UnivariateSpline(x, y, s=0.001, ext='extrapolate')
-
-    # Extend coordinates to account for smoothing window
-    dx = x[1] - x[0]
-    x_pad_begin = x[0] - dx - dx * np.arange(win_size)
-    x_pad_end = x[-1] + dx + dx * np.arange(win_size)
-    x = np.hstack((x_pad_begin[::-1], x, x_pad_end))
-
-    # Extrapolate segment
-    y = spline(x)
-
-    # Use pandas to do a rolling window smoothing to smoothe corners
-    df = pd.DataFrame({'B': y})
-    df_filt = df.rolling(win_size, win_type='triang', center=True).sum()
-    y = df_filt.values.squeeze() / (0.5 * win_size)
-
-    return y[slice(win_size, -win_size)]
-
-def make_line(x, x1, y1, x2, y2):
-    slope = (y2 - y1) / (x2 - x1)
-    C = y1 - slope * x1
-    line = slope * x + C
-    return line
-
-def advance_terminus(profile, pad=5, verbose=False):
-    """
-    Advances terminus position to satisfy height above flotation criterion.
-    """
-
-    # Extract last <pad> points of profile
-    x_origin = profile.x[-1]
-    x_term = profile.x[-pad:] - x_origin
-    h_term = profile.HAF[-pad:]
-
-    # Fit quadratic to these points
-    phi = np.polyfit(x_term, h_term, 2)
-
-    # Compute the roots
-    roots = quadratic_roots(phi)
-    # Keep the one closest to zero
-    argmin = np.argmin(np.abs(roots))
-    x_zero = roots[argmin] + x_origin
-
-    # Compute rough number of extra grid points to add
-    n_add = int(np.round((x_zero - x_origin) / profile.dx))
-    if verbose:
-        print('New terminus at', x_zero)
-        print('Advancing %d cells' % n_add)
-
-    # Create new grid of x points
-    x_new = np.linspace(profile.x[0], x_zero, profile.N + n_add)
-
-    # Check if we need to add an extra point
-    dx_thresh = profile.dx + 0.05 * profile.dx
-    if (x_new[1] - x_new[0]) > dx_thresh:
-        x_new = np.linspace(profile.x[0], x_zero, profile.N + n_add + 1)
-
-    # Create new profile
-    new_profile = profile.update_coordinates(x_new, extrapolate=True)
-    new_profile.t = profile.t
-    if verbose:
-        print('New spacing:', new_profile.dx)
-
-    return new_profile
-
-def retreat_terminus(profile, verbose=False):
-    """
-    Retreats terminus position to satisfy height above flotation criterion.
-    """
-    # Create spline representation of HAF
-    spline = InterpolatedUnivariateSpline(profile.x, profile.HAF)
-
-    # Find roots
-    roots = spline.roots()
-    if len(roots) > 1:
-        raise ValueError('Found multiple zero crossings of HAF')
-    x_zero = roots[0]
-
-    # Compute rough number of grid points to remove
-    n_remove = int(np.round((profile.x[-1] - x_zero) / profile.dx))
-    if verbose:
-        print('Retreating %d cells' % n_remove)
-
-    # Create new grid of x points
-    x_new = np.linspace(profile.x[0], x_zero, profile.N - n_remove)
-
-    # Check if we need to remove an extra point
-    dx_thresh = profile.dx - 0.05 * profile.dx
-    if (x_new[1] - x_new[0]) < dx_thresh:
-        x_new = np.linspace(profile.x[0], x_zero, profile.N - n_remove - 1)
-
-    # Create new profile
-    new_profile = profile.update_coordinates(x_new, extrapolate=False)
-    new_profile.t = profile.t
-    if verbose:
-        print('New spacing:', new_profile.dx)
-
-    return new_profile
-
-def quadratic_roots(phi):
-    """
-    Computes roots of a quadratic polynomial.
-    """
-    a, b, c = phi
-    r1 = (-b + np.sqrt(b**2 - 4*a*c)) / (2*a)
-    r2 = (-b - np.sqrt(b**2 - 4*a*c)) / (2*a)
-    return r1, r2
 
 # end of file

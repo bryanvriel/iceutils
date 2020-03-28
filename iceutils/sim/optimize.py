@@ -6,15 +6,40 @@ try:
 except ImportError:
     from .models import np
 
+# Other packages
 from scipy import optimize
 import sys
-
 
 def find_root(profile, model, method='newton', n_iter=500, tol=1.0e-5, scale=1.0e-2,
               options=None):
     """
     Wrapper for various root-finding optimization algorithms. For any method other than 'newton',
     it calls scipy.optimize.root.
+
+    Parameters
+    ----------
+    profile: iceutils.sim.Profile
+        Profile instance.
+    model: iceutils.sim model
+        Sliding model instance.
+    method: str, optional
+        Root finding algorithm. Use any scipy.optimize.root algorithm or 'newton'.
+        Default: 'newton'.
+    n_iter: int, optional
+        Number of interations: Default: 500.
+    tol: float, optional
+        Tolerence for optimization. Default: 1.0e-5.
+    scale: float, optional
+        Value for scaling PDE residuals. Default: 1.0e-2.
+    options: dict, optional
+        Options dict for scipy.optimize.root.
+
+    Returns
+    -------
+    U: (N,) ndarray
+        Ice velocity solution.
+    F: (N,) ndarray
+        PDE residual values.
     """
     if method == 'newton':
         U, F = _find_root_newton(profile, model, n_iter=n_iter, tol=tol, scale=scale,
@@ -41,6 +66,34 @@ def _find_root_newton(profile,
     """
     Implements Newton's method for finding the roots of a multivariate function. Function
     is provided by model.compute_pde_values().
+
+    Parameters
+    ----------
+    profile: iceutils.sim.Profile
+        Profile instance.
+    model: iceutils.sim model
+        Sliding model object.
+    n_iter: int, optional
+        Number of interations: Default: 500.
+    tol: float, optional
+        Tolerence for optimization. Default: 1.0e-5.
+    scale: float, optional
+        Value for scaling PDE residuals. Default: 1.0e-2.
+    reltol: float, optional
+        Relative tolerance (minimum change in residual norm). Default: 1.0e-10.
+    delta: float, optional
+        Learning rate for Newton iterations. Default: 0.2
+    reg_param: float, optional
+        Regularization parameter for computing Hessian matrix. Default: 1.0e-10.
+    verbose: bool, optional
+        Print out iteration progress. Default: False.
+
+    Returns
+    -------
+    U: (N,) ndarray
+        Ice velocity solution.
+    F: (N,) ndarray
+        PDE residual values.
     """
     # Initial velocity and pde values
     U = profile.u.copy()
@@ -75,13 +128,7 @@ def _find_root_newton(profile,
         JtF = np.dot(J.T, F)
         iJtJ = np.linalg.inv(JtJ)
         dU = np.dot(iJtJ, -1.0*JtF)
-
-        #JtJ = np.dot(J.T, J)
-        #regmat = reg_param * np.clip(np.diag(JtJ), 0.0, 50000.0)
-        #JtF = np.dot(J.T, F)
-        #iJtJ = np.linalg.inv(JtJ + regmat)
-        #dU = np.dot(iJtJ, -1.0*JtF)
-
+        
         # Update velocities
         U += delta * dU
         F_prev = F

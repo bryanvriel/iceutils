@@ -3,8 +3,12 @@
 import numpy as np
 from scipy.interpolate import UnivariateSpline, interp1d
 import sys
-
 from .utilities import *
+
+"""
+These models are simplified 1D velocity models for quick and dirty analysis, e.g.
+estimating velocity for pure basal sliding, calculating Peclet number, etc.
+"""
 
 class Basal:
 

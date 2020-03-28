@@ -1,42 +1,20 @@
 #-*- coding: utf-8 -*-
 
-def load_profile_from_h5(h5file):
-    """
-    Creates a Profile object using data from an HDF5 output run
-    """
-    import h5py
-    from .geometry import Profile
-    with h5py.File(h5file, 'r') as fid:
-        u, h, b, x = [fid[key][()] for key in ('u', 'h', 'b', 'x')]
-        profile = Profile(x, h, b, u)
-        if 't' in fid.keys():
-            profile.t = fid['t'][()]
-        else:
-            profile.t = 0.0
-    return profile
-
-def save_profile_to_h5(profile, h5file, aux_data={}):
-    """
-    Saves a Profile object to HDF5.
-    """
-    import h5py
-    with h5py.File(h5file, 'w') as fid:
-
-        # Save standard profile data
-        for key in ('u', 'h', 'b', 'x'):
-            fid[key] = getattr(profile, key)
-        if hasattr(profile, 't'):
-            fid['t'] = profile.t
-
-        # If any extra data has been provided, save those as Datasets
-        for key, value in aux_data.items():
-            fid[key] = value
-
-    return
-
 def AGlen_vs_temp(T, KPa=False):
     """
-    Copied from Hilmar's Ua code, but cat return in units of {a^-1} {Pa^-3}
+    Copied from Hilmar's Ua code, but can return in units of {a^-1} {Pa^-3}
+
+    Parameters
+    ----------
+    T: float
+        Temperature in Celsus.
+    KPa: bool, optional
+        Return in units of {a^-1} {KPa^-3}. Default: False.
+
+    Returns
+    -------
+    AGlen: float
+        Glen's Flow Law parameter.
     """
     import math
 
