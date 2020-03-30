@@ -488,7 +488,27 @@ class DFTTemplateMatcher(Correlator):
         return
 
     def correlate(self, master, slave, *args):
+        """
+        Use DFT-based template matching to construct correlation surface.
 
+        Manuel Guizar - 2014.06.02
+
+        Parameters
+        ----------
+        master: (N, N) ndarray
+            Array for master chip.
+        slave: (N, N) ndarray
+            Array for slave chip.
+
+        Returns
+        -------
+        dx: float
+            Offset in X-direction.
+        dy: float
+            Offset in Y-direction.
+        snr: float
+            SNR value.
+        """
         # Take 2D FFT of chips
         buf1ft = np.fft.fft2(master)
         buf2ft = np.fft.fft2(slave)
@@ -542,7 +562,11 @@ class DFTTemplateMatcher(Correlator):
         return col_shift, row_shift, snr
 
     def _dftups(self, x_in, nor=None, noc=None, roff=0, coff=0):
+        """
+        DFT upsampling utility function.
 
+        Manuel Guizar - 2014.06.02
+        """
         nr, nc = x_in.shape
         if nor is None or noc is None:
             nor, noc = nr, nc
@@ -567,14 +591,17 @@ class DFTTemplateMatcher(Correlator):
         care that the zero frequency is put in the correct place for the output
         for subsequent FT or IFT. Can be used for Fourier transform based
         interpolation, i.e. dirichlet kernel interpolation. 
+
+        Manuel Guizar - 2014.06.02
         
-          Inputs
+        Parameters
+        ----------
         imFT      - Input complex array with DC in [1,1]
         outsize   - Output size of array [ny nx] 
         
-          Outputs
+        Returns
+        -------
         imout   - Output complex image with DC in [1,1]
-        Manuel Guizar - 2014.06.02
         """
         assert imFT.ndim == 2
 
