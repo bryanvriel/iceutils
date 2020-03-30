@@ -11,7 +11,7 @@ import os
 from .raster import Raster, RasterInfo
 
 def offset_map(master_raster, slave_raster, win_x=64, win_y=64, search=20, margin=50,
-               skip_x=32, skip_y=32, coarse=False, coarse_over=False, n_proc=1):
+               skip_x=32, skip_y=32, coarse=False, coarse_over=False, dft=False, n_proc=1):
     """
     Build maps of dense offsets between two rasters. Uses template matching (amplitude
     cross correlation) or phase ramp estimation (default).
@@ -38,6 +38,8 @@ def offset_map(master_raster, slave_raster, win_x=64, win_y=64, search=20, margi
         Use only integer resolution template matching. Default: False.
     coarse_over: bool, optional
         Use template matching with correlation surface oversampling. Default: False.
+    dft: bool, optional
+        Use DFT-based template matching. Default: False.
     n_proc: int, optional
         Number of parallel processors. Default: 1.
 
@@ -83,9 +85,12 @@ def offset_map(master_raster, slave_raster, win_x=64, win_y=64, search=20, margi
     print('Output grid shape:', aoff.shape)
 
     # Create correlator objects
-    template_matcher = TemplateMatcher(win_y, win_x, search=search)
+    coarse_matcher = TemplateMatcher(win_y, win_x, search=search)
     if not coarse and not coarse_over:
-        phase_matcher = PhaseRampCorrelator(win_y, win_x)
+        if dft:
+            fine_matcher = DFTTemplateMatcher(win_y, win_x, zoom=64)
+        else:
+            fine_matcher = PhaseRampCorrelator(win_y, win_x)
 
     # Process chips in parallel
     with pymp.Parallel(n_proc) as manager:
@@ -118,7 +123,7 @@ def offset_map(master_raster, slave_raster, win_x=64, win_y=64, search=20, margi
             abs_slave = np.abs(slave)
 
             # Run template maching to get coarse offset
-            dx0, dy0, snr_value = template_matcher.correlate(
+            dx0, dy0, snr_value = coarse_matcher.correlate(
                 abs_master, abs_slave, oversample=coarse_over
             )
 
@@ -131,7 +136,7 @@ def offset_map(master_raster, slave_raster, win_x=64, win_y=64, search=20, margi
 
             # Keep only interior portion of master chip
             master = master[search:-search, search:-search]
-
+            
             # If SNR is low, reset coarse offsets to zero
             if snr_value < 6.0:
                 m0 = [0.0, 0.0]
@@ -139,12 +144,12 @@ def offset_map(master_raster, slave_raster, win_x=64, win_y=64, search=20, margi
                 m0 = [-dx0, -dy0]
 
             # Compute phase ramp correlation
-            dx, dy, var_reduction = phase_matcher.correlate(master, slave, m0)
+            dx, dy, snr_value = fine_matcher.correlate(master, slave, m0)
 
             # Store result
-            aoff[out_row, out_col] = -dy
-            roff[out_row, out_col] = -dx
-            snr[out_row, out_col] = var_reduction
+            aoff[out_row, out_col] = dy
+            roff[out_row, out_col] = dx
+            snr[out_row, out_col] = snr_value
 
     # Create output rasters
     a_raster = Raster(data=aoff, hdr=out_hdr)
@@ -384,8 +389,8 @@ class PhaseRampCorrelator(Correlator):
         misfit = phase - pred_phase
         var_reduction = 1.0 - np.var(misfit) / np.var(phase)
 
-        # Done
-        return dx, dy, var_reduction
+        # Make sign consistent with other methods
+        return -1.0*dx, -1.0*dy, var_reduction
 
     def cost_func(self, m, C, weight_mask, weight_sum):
         """
@@ -455,6 +460,143 @@ class PhaseRampCorrelator(Correlator):
         misfit /= weight_sum
 
         return misfit
+
+
+class DFTTemplateMatcher(Correlator):
+    """
+    Compares two image chips using frequency domain multiplication to estimate
+    offset between chips.
+
+    Parameters
+    ----------
+    chip_ny: int
+        Chip dimension in y-direction.
+    chip_nx: int
+        Chip dimension in x-direction.
+    zoom: int, optional
+        Zoom factor for oversampling. Default: 32.
+    """
+
+    def __init__(self, chip_ny, chip_nx, zoom=32):
+        """
+        Initialize DFTTemplateMatcher class.
+        """
+        # Initialize parent class (no search window buffer)
+        super().__init__(chip_ny, chip_nx, search=0)
+        self.zoom = zoom
+
+        return
+
+    def correlate(self, master, slave, *args):
+
+        # Take 2D FFT of chips
+        buf1ft = np.fft.fft2(master)
+        buf2ft = np.fft.fft2(slave)
+
+        nr, nc = buf2ft.shape
+        Nr = np.fft.ifftshift(np.arange(-np.fix(nr/2), int(np.ceil(nr//2))))
+        Nc = np.fft.ifftshift(np.arange(-np.fix(nc/2), int(np.ceil(nc//2))))
+
+        # Start with zoom == 2
+        CC = np.fft.ifft2(self._FTpad(buf1ft * np.conj(buf2ft), (2*nr, 2*nc)))
+        CCabs = np.abs(CC)
+        indmax = np.argmax(CCabs)
+        row_shift, col_shift = np.unravel_index(indmax, CCabs.shape)
+        CCmax = CC[row_shift, col_shift] * nr * nc
+
+        # Compute rough SNR
+        snr = CCabs[row_shift, col_shift] / np.median(CCabs)
+
+        # Now change shifts so that they represent relative shifts and not indices
+        Nr2 = np.fft.ifftshift(np.arange(-np.fix(nr), int(np.ceil(nr))))
+        Nc2 = np.fft.ifftshift(np.arange(-np.fix(nc), int(np.ceil(nc))))
+        row_shift = Nr2[row_shift] / 2
+        col_shift = Nc2[col_shift] / 2
+
+        # If upsampling > 2, then refine estimate with matrix multiply DFT
+        if self.zoom > 2:
+
+            # DFT computation
+            # Initial shift estimate in upsampled grid 
+            row_shift = np.round(row_shift * self.zoom) / self.zoom
+            col_shift = np.round(col_shift * self.zoom) / self.zoom
+            dftshift = np.fix(np.ceil(self.zoom * 1.5) / 2)
+
+            # Matrix multiply DFT around the current shift estimate
+            CC = np.conj(self._dftups(buf2ft * np.conj(buf1ft),
+                                     nor=np.ceil(self.zoom * 1.5),
+                                     noc=np.ceil(self.zoom * 1.5),
+                                     roff=dftshift - row_shift * self.zoom,
+                                     coff=dftshift - col_shift * self.zoom))
+
+            # Locate maximum and map back to original pixel grid
+            CCabs = np.abs(CC)
+            iloc = np.argmax(CCabs)
+            rloc, cloc = np.unravel_index(iloc, CCabs.shape)
+            CCmax = CC[rloc, cloc]
+            rloc = rloc - dftshift
+            cloc = cloc - dftshift
+            row_shift += rloc / self.zoom
+            col_shift += cloc / self.zoom
+
+        return col_shift, row_shift, snr
+
+    def _dftups(self, x_in, nor=None, noc=None, roff=0, coff=0):
+
+        nr, nc = x_in.shape
+        if nor is None or noc is None:
+            nor, noc = nr, nc
+
+        # Compute kernels and obtain DFT by matrix products
+        term1c = np.fft.ifftshift(np.arange(nc) - np.floor(nc/2)).T[:,np.newaxis]
+        term2c = (np.arange(noc) - coff)[np.newaxis,:]
+        kernc = np.exp((-1j * 2 * np.pi / (nc * self.zoom)) * term1c * term2c)
+
+        term1r = (np.arange(nor).T - roff)[:,np.newaxis]
+        term2r = (np.fft.ifftshift(np.arange(nr)) - np.floor(nr/2))[np.newaxis,:]
+        kernr = np.exp((-1j * 2 * np.pi / (nr * self.zoom)) * term1r * term2r)
+
+        out = np.dot(kernr, np.dot(x_in, kernc))
+
+        return out
+
+    def _FTpad(self, imFT, outsize):
+        """
+        imFTout = FTpad(imFT,outsize)
+        Pads or crops the Fourier transform to the desired ouput size. Taking 
+        care that the zero frequency is put in the correct place for the output
+        for subsequent FT or IFT. Can be used for Fourier transform based
+        interpolation, i.e. dirichlet kernel interpolation. 
+        
+          Inputs
+        imFT      - Input complex array with DC in [1,1]
+        outsize   - Output size of array [ny nx] 
+        
+          Outputs
+        imout   - Output complex image with DC in [1,1]
+        Manuel Guizar - 2014.06.02
+        """
+        assert imFT.ndim == 2
+
+        Nout = np.array(outsize)
+        Nin = np.array(imFT.shape)
+        imFT = np.fft.fftshift(imFT)
+        center = (np.floor(Nin / 2)).astype(int)
+
+        imFTout = np.zeros(outsize, dtype=imFT.dtype)
+        center_out = (np.floor(Nout / 2)).astype(int)
+
+        cenout_cen = center_out - center
+
+        imFTout[max(cenout_cen[0], 0):min(cenout_cen[0] + Nin[0], Nout[0]),
+                max(cenout_cen[1], 0):min(cenout_cen[1] + Nin[1], Nout[1])] = \
+            imFT[max(-cenout_cen[0], 0):min(-cenout_cen[0] + Nout[0], Nin[0]),
+                 max(-cenout_cen[1], 0):min(-cenout_cen[1] + Nout[1], Nin[1])]
+
+        factor = np.product(Nout) / np.product(Nin)
+        imFTout = np.fft.ifftshift(imFTout) * factor
+
+        return imFTout
 
 
 # end of file
