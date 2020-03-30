@@ -10,18 +10,55 @@ import os
 
 from .raster import Raster, RasterInfo
 
-def correlate(master_raster, slave_raster, win_x=64, win_y=64, search=20, margin=50,
-              skip_x=32, skip_y=32, coarse=False, coarse_over=False, n_proc=1):
+def offset_map(master_raster, slave_raster, win_x=64, win_y=64, search=20, margin=50,
+               skip_x=32, skip_y=32, coarse=False, coarse_over=False, n_proc=1):
+    """
+    Build maps of dense offsets between two rasters. Uses template matching (amplitude
+    cross correlation) or phase ramp estimation (default).
 
+    Parameters
+    ----------
+    master_raster: str
+        Filename for master raster.
+    slave_raster: str
+        Filename for slave raster.
+    win_x: int, optional
+        Chip size in the x-dimension. Default: 64.
+    win_y: int, optional
+        Chip size in the y-dimension: Default: 64.
+    search: int, optional
+        Search window size. Default: 20.
+    margin: int, optional
+        Margin to skip offset estimation. Default: 50.
+    skip_x: int, optional
+        Skip factor in x-dimension. Default: 32.
+    skip_y: int, optional
+        Skip factor in y-dimension. Default: 32.
+    coarse: bool, optional
+        Use only integer resolution template matching. Default: False.
+    coarse_over: bool, optional
+        Use template matching with correlation surface oversampling. Default: False.
+    n_proc: int, optional
+        Number of parallel processors. Default: 1.
+
+    Returns
+    -------
+    a_raster: ice.Raster
+        Raster for offsets in y-direction.
+    r_raster: ice.Raster
+        Raster for offsets in x-direction.
+    s_raster: ice.Raster
+        Raster for SNR.
+    """
     # Get shape information from master image
     hdr = RasterInfo(rasterfile=master_raster)
     ny, nx = hdr.ny, hdr.nx
 
     # Load master image memory map
-    mmap = np.memmap(master_raster, dtype=np.float32, mode='r').reshape(ny, nx)
+    mmap = np.memmap(master_raster, dtype=hdr.dtype, mode='r').reshape(ny, nx)
 
     # Load slave image memory map
-    smap = np.memmap(slave_raster, dtype=np.float32, mode='r').reshape(ny, nx)
+    smap = np.memmap(slave_raster, dtype=hdr.dtype, mode='r').reshape(ny, nx)
 
     # Make center indices for image chips
     i_chip = np.arange(win_y // 2 + margin, ny - win_y // 2 - margin, skip_y)
@@ -65,9 +102,10 @@ def correlate(master_raster, slave_raster, win_x=64, win_y=64, search=20, margin
             rows = slice(i - (win_y // 2) - search, i + (win_y // 2) + search)
             cols = slice(j - (win_x // 2) - search, j + (win_x // 2) + search)
             master = mmap[rows, cols]
+            abs_master = np.abs(master)
 
             # Check if values are large enough
-            if np.median(master) < 0.2:
+            if np.median(abs_master) < 0.2:
                 aoff[out_row, out_col] = np.nan
                 roff[out_row, out_col] = np.nan
                 snr[out_row, out_col] = np.nan
@@ -77,9 +115,12 @@ def correlate(master_raster, slave_raster, win_x=64, win_y=64, search=20, margin
             rows = slice(i - (win_y // 2), i + (win_y // 2))
             cols = slice(j - (win_x // 2), j + (win_x // 2))
             slave = smap[rows, cols]
+            abs_slave = np.abs(slave)
 
             # Run template maching to get coarse offset
-            dx0, dy0, snr_value = template_matcher.correlate(master, slave, oversample=coarse_over)
+            dx0, dy0, snr_value = template_matcher.correlate(
+                abs_master, abs_slave, oversample=coarse_over
+            )
 
             # Continue loop if only performing template matching
             if coarse or coarse_over:
@@ -91,8 +132,14 @@ def correlate(master_raster, slave_raster, win_x=64, win_y=64, search=20, margin
             # Keep only interior portion of master chip
             master = master[search:-search, search:-search]
 
+            # If SNR is low, reset coarse offsets to zero
+            if snr_value < 6.0:
+                m0 = [0.0, 0.0]
+            else:
+                m0 = [-dx0, -dy0]
+
             # Compute phase ramp correlation
-            dx, dy, var_reduction = phase_matcher.correlate(master, slave, [-dx0, -dy0])
+            dx, dy, var_reduction = phase_matcher.correlate(master, slave, m0)
 
             # Store result
             aoff[out_row, out_col] = -dy
@@ -121,6 +168,7 @@ class Correlator:
 
     def correlate(self, master, slave, **kwargs):
         raise NotImplementedError('Child classes must implement correlate method.')
+
 
 class TemplateMatcher(Correlator):
     """
@@ -320,12 +368,14 @@ class PhaseRampCorrelator(Correlator):
         # Weighting mask
         LS = np.log10(np.abs(prod))
         NLS = LS - np.max(LS)
-        weight_mask = NLS > (0.99 * np.median(NLS))
+        weight_mask = NLS > (0.95 * np.median(NLS))
         weight_sum = np.sum(weight_mask)
 
         # Perform optimization
         res = minimize(self.cost_func, m0, method='Nelder-Mead',
                        args=(C, weight_mask, weight_sum))
+        #res = minimize(self.phase_cost_func, m0, method='Nelder-Mead',
+        #               args=(phase, weight_mask, weight_sum))
         dx, dy = res.x
 
         # Compute variance reduction as a measure of SNR
@@ -371,6 +421,40 @@ class PhaseRampCorrelator(Correlator):
         # Return Frobenius norm
         cost = np.sum(R) / weight_sum
         return cost
+
+    def phase_cost_func(self, m, obs_phase, weight_mask, weight_sum):
+        """
+        Computes scalar misfit between complex cross-spectrum array and prediction
+        by phase ramp.
+
+        Parameters
+        ----------
+        m: (2,) array_like
+            Array of parameters.
+        obs_phase: (N, N) ndarray, float
+            Cross-spectrum phase.
+        weight_mask: (N, N) ndarray
+            Weighting array.
+        weight_sum: float
+            Sum of weighting array.
+
+        Returns
+        -------
+        cost: float
+            Scalar misfit.
+        """
+        # Unpack parameters
+        dx, dy = m
+
+        # Phase prediction (modulated)
+        theta = self.Wx * dx + self.Wy * dy
+        pred_phase = np.arctan2(np.sin(theta), np.cos(theta))
+
+        # Return weighted residual
+        misfit = np.sum(((obs_phase - pred_phase)**2) * weight_mask)
+        misfit /= weight_sum
+
+        return misfit
 
 
 # end of file
