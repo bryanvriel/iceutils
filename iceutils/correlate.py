@@ -11,7 +11,8 @@ import os
 from .raster import Raster, RasterInfo
 
 def offset_map(master_raster, slave_raster, win_x=64, win_y=64, search=20, margin=50,
-               skip_x=32, skip_y=32, coarse=False, coarse_over=False, dft=False, n_proc=1):
+               skip_x=32, skip_y=32, coarse=False, coarse_over=False, dft=False,
+               snr_thresh=5.0, n_proc=1):
     """
     Build maps of dense offsets between two rasters. Uses template matching (amplitude
     cross correlation) or phase ramp estimation (default).
@@ -40,6 +41,9 @@ def offset_map(master_raster, slave_raster, win_x=64, win_y=64, search=20, margi
         Use template matching with correlation surface oversampling. Default: False.
     dft: bool, optional
         Use DFT-based template matching. Default: False.
+    snr_thresh: float, optional
+        Lower SNR threshold at which to set initial guess for offsets to 0 (only
+        used for phase ramp estimation). Default: 5.0.
     n_proc: int, optional
         Number of parallel processors. Default: 1.
 
@@ -122,6 +126,18 @@ def offset_map(master_raster, slave_raster, win_x=64, win_y=64, search=20, margi
             slave = smap[rows, cols]
             abs_slave = np.abs(slave)
 
+            # If DFT method, no need to run coarse template matching
+            if dft:
+                # Keep only interior portion of master chip
+                master = master[search:-search, search:-search]
+                # Compute offset
+                dx, dy, snr_value = fine_matcher.correlate(master, slave)
+                # Store
+                aoff[out_row, out_col] = dy
+                roff[out_row, out_col] = dx
+                snr[out_row, out_col] = snr_value
+                continue
+
             # Run template maching to get coarse offset
             dx0, dy0, snr_value = coarse_matcher.correlate(
                 abs_master, abs_slave, oversample=coarse_over
@@ -134,17 +150,37 @@ def offset_map(master_raster, slave_raster, win_x=64, win_y=64, search=20, margi
                 snr[out_row, out_col] = snr_value
                 continue
 
-            # Keep only interior portion of master chip
-            master = master[search:-search, search:-search]
-            
-            # If SNR is low, reset coarse offsets to zero
-            if snr_value < 6.0:
-                m0 = [0.0, 0.0]
-            else:
-                m0 = [-dx0, -dy0]
+            ## Keep only interior portion of master chip
+            #master = master[search:-search, search:-search]
+            #            
+            ## If SNR is low, reset coarse offsets to zero
+            #if snr_value < snr_thresh:
+            #    m0 = [0.0, 0.0]
+            #else:
+            #    m0 = [-dx0, -dy0]
 
-            # Compute phase ramp correlation
-            dx, dy, snr_value = fine_matcher.correlate(master, slave, m0)
+            ## Compute phase ramp correlation
+            #dx, dy, snr_value = fine_matcher.correlate(master, slave, m0)
+
+
+            # Re-center master chip using coarse offset
+            if snr_value < snr_thresh:
+                dx0 = dy0 = 0
+            else:
+                dx0, dy0 = int(dx0), int(dy0)
+            cols = slice(search + dx0, search + dx0 + win_x)
+            rows = slice(search + dy0, search + dy0 + win_y)
+            master = master[rows, cols]
+
+
+            # Compute sub-pixel offset
+            dx, dy, snr_value = fine_matcher.correlate(master, slave, [0.0, 0.0])
+
+            # Add back coarse offsets
+            dx = -1.0 * (-1.0 * dx - dx0)
+            dy = -1.0 * (-1.0 * dy - dy0)
+
+
 
             # Store result
             aoff[out_row, out_col] = dy
