@@ -178,7 +178,7 @@ class LateralIceStream:
         Scale factor for boundary conditions. Default: 500.0.
     """
     
-    def __init__(self, profile, calving_force, A, W=3000.0, As=100.0, mu=1.0, n=3, m=3):
+    def __init__(self, profile, calving_force, A, W=3000.0, mu=1.0, n=3, m=3, bv_scale=500.0):
         """
         Initialize LateralIceStream class.
         """
@@ -189,7 +189,6 @@ class LateralIceStream:
         self.W = W                  # FULL width of glacier
         self.A = A
         self.g = 9.80665
-        self.As = As
         self.mu = mu
         self.n = n
         self.m = m
@@ -197,7 +196,7 @@ class LateralIceStream:
         self.rho_water = profile.rho_water
 
         # Numerical parameters
-        self.boundary_value_scale = 500.0
+        self.boundary_value_scale = bv_scale
 
         # Epsilon value when computing the effective viscosity
         # When grid cell size gets smaller, this should also be smaller to ensure stability
@@ -234,9 +233,9 @@ class LateralIceStream:
         """
 
         # Cache some parameters to use here
-        g, n, m, W, A, As, mu = [
+        g, n, m, W, A, mu = [
             getattr(self, attr) for attr in 
-            ('g', 'n', 'm', 'W', 'A', 'As', 'mu')
+            ('g', 'n', 'm', 'W', 'A', 'mu')
         ]
 
         # Cache some variables from the profile
@@ -260,7 +259,7 @@ class LateralIceStream:
         # Basal drag
         absu = np.abs(u)
         usign = u / absu
-        basal_drag = scale * usign * mu * As * (self.Hf * absu)**(1 / m)
+        basal_drag = scale * usign * mu * (self.Hf * absu)**(1 / m)
 
         # Lateral drag
         lateral_drag = scale * 2 * usign * h / W * (5 * absu / (A * W))**(1 / n)
