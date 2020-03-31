@@ -150,37 +150,17 @@ def offset_map(master_raster, slave_raster, win_x=64, win_y=64, search=20, margi
                 snr[out_row, out_col] = snr_value
                 continue
 
-            ## Keep only interior portion of master chip
-            #master = master[search:-search, search:-search]
-            #            
-            ## If SNR is low, reset coarse offsets to zero
-            #if snr_value < snr_thresh:
-            #    m0 = [0.0, 0.0]
-            #else:
-            #    m0 = [-dx0, -dy0]
-
-            ## Compute phase ramp correlation
-            #dx, dy, snr_value = fine_matcher.correlate(master, slave, m0)
-
-
-            # Re-center master chip using coarse offset
+            # Keep only interior portion of master chip
+            master = master[search:-search, search:-search]
+                        
+            # If SNR is low, reset coarse offsets to zero
             if snr_value < snr_thresh:
-                dx0 = dy0 = 0
+                m0 = [0.0, 0.0]
             else:
-                dx0, dy0 = int(dx0), int(dy0)
-            cols = slice(search + dx0, search + dx0 + win_x)
-            rows = slice(search + dy0, search + dy0 + win_y)
-            master = master[rows, cols]
+                m0 = [-dx0, -dy0]
 
-
-            # Compute sub-pixel offset
-            dx, dy, snr_value = fine_matcher.correlate(master, slave, [0.0, 0.0])
-
-            # Add back coarse offsets
-            dx = -1.0 * (-1.0 * dx - dx0)
-            dy = -1.0 * (-1.0 * dy - dy0)
-
-
+            # Compute phase ramp correlation
+            dx, dy, snr_value = fine_matcher.correlate(master, slave, m0)
 
             # Store result
             aoff[out_row, out_col] = dy
@@ -411,12 +391,10 @@ class PhaseRampCorrelator(Correlator):
         NLS = LS - np.max(LS)
         weight_mask = NLS > (0.95 * np.median(NLS))
         weight_sum = np.sum(weight_mask)
-
+        
         # Perform optimization
         res = minimize(self.cost_func, m0, method='Nelder-Mead',
                        args=(C, weight_mask, weight_sum))
-        #res = minimize(self.phase_cost_func, m0, method='Nelder-Mead',
-        #               args=(phase, weight_mask, weight_sum))
         dx, dy = res.x
 
         # Compute variance reduction as a measure of SNR
@@ -580,10 +558,10 @@ class DFTTemplateMatcher(Correlator):
 
             # Matrix multiply DFT around the current shift estimate
             CC = np.conj(self._dftups(buf2ft * np.conj(buf1ft),
-                                     nor=np.ceil(self.zoom * 1.5),
-                                     noc=np.ceil(self.zoom * 1.5),
-                                     roff=dftshift - row_shift * self.zoom,
-                                     coff=dftshift - col_shift * self.zoom))
+                                      nor=np.ceil(self.zoom * 1.5),
+                                      noc=np.ceil(self.zoom * 1.5),
+                                      roff=dftshift - row_shift * self.zoom,
+                                      coff=dftshift - col_shift * self.zoom))
 
             # Locate maximum and map back to original pixel grid
             CCabs = np.abs(CC)
