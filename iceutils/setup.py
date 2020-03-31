@@ -8,6 +8,7 @@ import os
 def configuration(parent_package='', top_path=None):
     config = Configuration('iceutils', parent_package, top_path)
     config.add_subpackage('tseries')
+    config.add_subpackage('sim')
     config.make_config_py()
     return config
 
