@@ -9,7 +9,10 @@ from .timeutils import *
 from .matutils import *
 from .constants import *
 from .visualization import *
+
+# Submodules
 from . import tseries
+from . import sim
 
 # Site-dependent modules
 from . import jakobshavn
