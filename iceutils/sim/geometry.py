@@ -534,6 +534,8 @@ def advance_terminus(profile, pad=5, verbose=False):
     new_profile: Profile
         New Profile instance. 
     """
+    # Import non-jax numpy
+    import numpy
 
     # Extract last <pad> points of profile
     x_origin = profile.x[-1]
@@ -541,27 +543,27 @@ def advance_terminus(profile, pad=5, verbose=False):
     h_term = profile.HAF[-pad:]
 
     # Fit quadratic to these points
-    phi = np.polyfit(x_term, h_term, 2)
+    phi = numpy.polyfit(x_term, h_term, 2)
 
     # Compute the roots
     roots = quadratic_roots(phi)
     # Keep the one closest to zero
-    argmin = np.argmin(np.abs(roots))
+    argmin = numpy.argmin(numpy.abs(roots))
     x_zero = roots[argmin] + x_origin
 
     # Compute rough number of extra grid points to add
-    n_add = int(np.round((x_zero - x_origin) / profile.dx))
+    n_add = int(numpy.round((x_zero - x_origin) / profile.dx))
     if verbose:
         print('New terminus at', x_zero)
         print('Advancing %d cells' % n_add)
 
     # Create new grid of x points
-    x_new = np.linspace(profile.x[0], x_zero, profile.N + n_add)
+    x_new = numpy.linspace(profile.x[0], x_zero, profile.N + n_add)
 
     # Check if we need to add an extra point
     dx_thresh = profile.dx + 0.05 * profile.dx
     if (x_new[1] - x_new[0]) > dx_thresh:
-        x_new = np.linspace(profile.x[0], x_zero, profile.N + n_add + 1)
+        x_new = numpy.linspace(profile.x[0], x_zero, profile.N + n_add + 1)
 
     # Create new profile
     new_profile = profile.update_coordinates(x_new, extrapolate=True)
