@@ -50,7 +50,6 @@ class Profile:
         self.b = b
         self.u = u
         self.rho_water, self.rho_ice = rho_water, rho_ice
-        self.depth = -1.0 * self.b
         self.N = len(x)
         self.dx = x[1] - x[0]
         self.t = t
@@ -70,6 +69,8 @@ class Profile:
         """
         # Ice surface
         self.s = self.b + self.h
+        # Bed depth
+        self.depth = -1.0 * self.b
         # Surface slope
         self.alpha = -1.0 * np.dot(self.D, self.s)
         # Depth ratio
@@ -248,6 +249,9 @@ class Profile:
         -------
         None
         """
+        # Import default numpy
+        import numpy
+
         if axes is None:
             fig, axes = plt.subplots(nrows=len(items), figsize=(10,6))
         else:
@@ -262,7 +266,7 @@ class Profile:
                 ax.plot(self.x, self.u)
             elif item == 'flux':
                 flux = self.h * self.u
-                dflux = np.gradient(flux, self.x)
+                dflux = numpy.gradient(flux, self.x)
                 ax.plot(self.x, flux)
                 ax_twin = ax.twinx()
                 ax_twin.plot(self.x, dflux, 'r')
