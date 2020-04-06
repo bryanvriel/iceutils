@@ -28,7 +28,7 @@ pip install pint
 
 To install `iceutils`, first, clone the repository:
 ```
-git clone git@github.com:BryanRiel/iceutils.git
+git clone git@github.com:bryanvriel/iceutils.git
 ```
 Then, simply run `python setup.py install` in the main repository directory to install.
 
@@ -182,7 +182,7 @@ More often than not, we would like to compute quantities of multiple stacks, e.g
 stack = ice.MagStack(files=['vx.h5', 'vy.h5'])
 ```
 This object can then be queried in the same way a `Stack` can be queried:
-```
+```python
 # Get time series
 d = stack.timeseries(xy=(1000.0, 1000.0))
 
