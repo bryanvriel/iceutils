@@ -6,10 +6,7 @@ import sys
 import os
 
 def configuration(parent_package='', top_path=None):
-    config = Configuration('iceutils', parent_package, top_path)
-    config.add_subpackage('tseries')
-    config.add_subpackage('sim')
-    config.make_config_py()
+    config = Configuration('sim', parent_package, top_path)
     return config
 
 if __name__ == '__main__':
