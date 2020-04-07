@@ -1,5 +1,6 @@
 #-*- coding: utf-8 -*-
 
+import warnings
 import numpy as np
 import h5py
 import sys
@@ -143,7 +144,8 @@ class Stack:
     def timeseries(self, xy=None, coord=None, key='data', win_size=1):
         """
         Extract time series at a given spatial coordinate. Optionally extract a window of
-        time series and average spatially.
+        time series and average spatially. If requested coordinate is outside of stack
+        bounds, NaN array is returned.
         """
         # Get the image coordinate if not provided
         if xy is not None and coord is None:
@@ -152,18 +154,23 @@ class Stack:
         elif coord is not None:
             row, col = coord
         else:
-            return None
+            raise ValueError('Must pass in geographic or image coordinate.')
 
-        # Check bounds
-        if row >= self.Ny or row < 0:
-            return None
-        if col >= self.Nx or col < 0:
-            return None
+        # Check bounds. Warn user and return NaN if outside of bounds
+        half_win = win_size // 2
+        if row >= (self.Ny - half_win) or row < half_win:
+            warnings.warn('Requested point outside of stack bounds. Returning NaN.',
+                          category=UserWarning)
+            return np.nan
+        if col >= (self.Nx - half_win) or col < half_win:
+            warnings.warn('Requested point outside of stack bounds. Returning NaN.',
+                          category=UserWarning)
+            return np.nan
 
         # Spatial slice
         if win_size > 1:
-            islice = slice(row - win_size // 2, row + win_size // 2 + 1)
-            jslice = slice(col - win_size // 2, col + win_size // 2 + 1)
+            islice = slice(row - half_win, row + half_win + 1)
+            jslice = slice(col - half_win, col + half_win + 1)
         else:
             islice, jslice = row, col
 
