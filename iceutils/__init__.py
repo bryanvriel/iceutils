@@ -10,7 +10,10 @@ from .matutils import *
 from .constants import *
 from .visualization import *
 from .correlate import *
+
+# Submodules
 from . import tseries
+from . import sim
 
 # Site-dependent modules
 from . import jakobshavn
