@@ -9,6 +9,7 @@ from .timeutils import *
 from .matutils import *
 from .constants import *
 from .visualization import *
+from .correlate import *
 
 # Submodules
 from . import tseries
