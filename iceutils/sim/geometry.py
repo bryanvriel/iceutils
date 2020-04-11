@@ -688,11 +688,13 @@ def create_flat_bed(x, b0=-500.0):
 
 def create_surface_profile(x, x_pin=50.0e3, s0=1000.0, amp=750.0, smoothing_win=40):
 
+    import numpy
+
     # Flat profile leading into logarithmic decay
-    s = s0 * np.ones_like(x)
+    s = s0 * numpy.ones_like(x)
     sub_mask = x > x_pin
     l = x.max() - x
-    ssub = amp * np.log(1.0 + l[sub_mask] / 40000.0)
+    ssub = amp * numpy.log(1.0 + l[sub_mask] / 40000.0)
     ssub += s0 - ssub[0]
     s[sub_mask] = ssub
 
