@@ -16,11 +16,11 @@ def AGlen_vs_temp(T, KPa=False):
     AGlen: float
         Glen's Flow Law parameter.
     """
-    import math
+    import numpy
 
     T = T + 273.15
     a0 = 5.3e-15 * 365.25 * 24. * 60. * 60. # a-1 kPa-3
-    fa = 1.2478766e-39 * math.exp(0.32769 * T) + 1.9463011e-10 * math.exp(0.07205 * T)
+    fa = 1.2478766e-39 * numpy.exp(0.32769 * T) + 1.9463011e-10 * numpy.exp(0.07205 * T)
     AGlen = a0 * fa
 
     if KPa:
