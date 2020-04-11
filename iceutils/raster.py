@@ -6,6 +6,19 @@ import h5py
 import gdal
 import sys
 
+# Map from GDAL data type to numpy
+gdal_type_to_numpy = {
+    gdal.GDT_Byte: np.byte,
+    gdal.GDT_Int16: np.int16,
+    gdal.GDT_Int32: np.int32,
+    gdal.GDT_UInt16: np.uint16,
+    gdal.GDT_UInt32: np.uint32,
+    gdal.GDT_Float32: np.float32,
+    gdal.GDT_Float64: np.float64,
+    gdal.GDT_CFloat32: np.complex64,
+    gdal.GDT_CFloat64: np.complex128
+}
+
 class Raster:
     """
     Class that encapsulates raster data and stores an instance of its header info.
@@ -154,12 +167,12 @@ class RasterInfo:
     """
 
     def __init__(self, rasterfile=None, stackfile=None, X=None, Y=None,
-                 islice=None, jslice=None):
+                 band=1, islice=None, jslice=None):
         """
         Initialize attributes.
         """
         if rasterfile is not None:
-            self.load_gdal_info(rasterfile, islice=islice, jslice=jslice)
+            self.load_gdal_info(rasterfile, islice=islice, jslice=jslice, band=band)
         elif stackfile is not None:
             self.load_stack_info(stackfile, islice=islice, jslice=jslice)
         elif X is not None and Y is not None:
@@ -167,18 +180,24 @@ class RasterInfo:
         else:
             self.xstart = self.dx = self.ystart = self.dy = self.ny = self.nx = None
 
-    def load_gdal_info(self, rasterfile, islice=None, jslice=None):
+    def load_gdal_info(self, rasterfile, islice=None, jslice=None, band=1):
         """
         Read raster and geotransform information from GDAL dataset.
         """
         # Open GDAL dataset
         dset = gdal.Open(rasterfile, gdal.GA_ReadOnly)
 
-        # Unpack geo transform and raster sizes
-        self.xstart, self.dx, _, self.ystart, _, self.dy = dset.GetGeoTransform()
+        # Unpack raster sizes
         self.ny = dset.RasterYSize
         self.nx = dset.RasterXSize
 
+        # Attempt to read geo transform
+        try:
+            self.xstart, self.dx, _, self.ystart, _, self.dy = dset.GetGeoTransform()
+        except AttributeError:
+            self.ystart = self.xstart = 0.0
+            self.dx = self.dy = 1.0
+            
         # Incorporate row slicing
         if islice is not None:
             self.ystart += islice.start * self.dy
@@ -190,6 +209,10 @@ class RasterInfo:
 
         # Set units
         self.units = 'm'
+
+        # Get data type from band
+        b = dset.GetRasterBand(band)
+        self.dtype = gdal_type_to_numpy[b.DataType]
 
         # Close dataset
         dset = None
