@@ -460,7 +460,7 @@ def interpolate_array(array, hdr, x, y, ref_hdr=None, order=3):
         x, y = ref_hdr.meshgrid()
 
     # Check if scalars are passed
-    if not isinstance(x, np.ndarray):
+    elif x is not None and not isinstance(x, np.ndarray):
         x = np.array([x])
         y = np.array([y])
 
