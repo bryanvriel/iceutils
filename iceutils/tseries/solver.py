@@ -282,7 +282,7 @@ def butterworth(stack, a, b, fname_long, fname_short, n_proc=1):
     # All done
     return 
 
-def butterworth_coeffs(frequency=None, period=None, dt=1.0, order=3):
+def butterworth_coeffs(frequency=None, period=None, dt=1.0, order=3, btype='low'):
     """
     Compute butterworth coefficients for a given cutoff frequency or period in time coordinates
     determined by sampling interval dt.
@@ -301,7 +301,7 @@ def butterworth_coeffs(frequency=None, period=None, dt=1.0, order=3):
     w_low = frequency / Fn
 
     # Compute Butterworth filter coefficients
-    b, a = signal.butter(order, w_low)
+    b, a = signal.butter(order, w_low, btype=btype)
     return b,a
     
 def get_chunks(stack, chunk_y, chunk_x):
