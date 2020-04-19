@@ -95,10 +95,13 @@ def _find_root_newton(profile,
     F: (N,) ndarray
         PDE residual values.
     """
-    # Initial velocity and pde values
+    # Set initial effective viscosity profile
     U = profile.u.copy()
-    F_prev = model.compute_pde_values(U)
+    model.update_nu(U)
 
+    # Initial pde values
+    F_prev = model.compute_pde_values(U)
+    
     # Damping matrix
     regmat = reg_param * np.eye(U.size)
 
@@ -124,7 +127,7 @@ def _find_root_newton(profile,
         J = model.compute_jacobian(U, scale=scale)
 
         # Compute update vector
-        JtJ = np.dot(J.T, J) + regmat
+        JtJ = np.dot(J.T, J) #+ regmat
         JtF = np.dot(J.T, F)
         iJtJ = np.linalg.inv(JtJ)
         dU = np.dot(iJtJ, -1.0*JtF)
@@ -132,6 +135,9 @@ def _find_root_newton(profile,
         # Update velocities
         U += delta * dU
         F_prev = F
+
+        # Compute effective viscosity
+        model.update_nu(U)
 
     return U, F
 
