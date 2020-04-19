@@ -65,6 +65,15 @@ class IceStream:
         # Initialize jacobian function
         self.fjac = jax.jacfwd(self.compute_pde_values, 0)
 
+    def update_nu(self, u):
+        """
+        Computes effective viscosity for a given velocity profile.
+        """
+        n, A = self.n, self.A
+        D = self.profile.D
+        Du = np.dot(D, u)
+        self.nu = A**(-1 / n) / (np.abs(Du)**((n - 1) / n) + self.nu_eps)
+
     def compute_pde_values(self, u, scale=1.0e-2, return_components=False):
         """
         Compute vector of PDE residuals for a given velocity profile.
@@ -87,7 +96,7 @@ class IceStream:
         """
 
         # Cache some parameters to use here
-        g, n, m, A = [getattr(self, attr) for attr in ('g', 'n', 'm', 'A')]
+        g, n, m, A, nu = [getattr(self, attr) for attr in ('g', 'n', 'm', 'A', 'nu')]
 
         # Cache some variables from the profile
         D, h, alpha, N = [getattr(self.profile, attr) for attr in ('D', 'h', 'alpha', 'N')]
@@ -97,9 +106,6 @@ class IceStream:
 
         # Compute gradient of velocity profile
         Du = np.dot(D, u)
-
-        # Dynamic viscosity
-        nu = A**(-1 / n) / (np.abs(Du)**((n - 1) / n) + self.nu_eps)
 
         # Membrane stresses
         membrane = scale * 2.0 * np.dot(D, h * nu * Du)
@@ -174,11 +180,14 @@ class LateralIceStream:
         Glen's Flow Law exponent. Default: 3.
     m: int, optional
         Sliding law exponent. Default: 3.
+    q: float, optional
+        Exponent for effective pressure. Default: 3.5.
     bv_scale: float, optional
         Scale factor for boundary conditions. Default: 500.0.
     """
     
-    def __init__(self, profile, calving_force, A, W=3000.0, mu=1.0, n=3, m=3, bv_scale=500.0):
+    def __init__(self, profile, calving_force, A, W=3000.0, mu=1.0, n=3, m=3, q=0.333,
+                 bv_scale=500.0):
         """
         Initialize LateralIceStream class.
         """
@@ -192,6 +201,7 @@ class LateralIceStream:
         self.mu = mu
         self.n = n
         self.m = m
+        self.q = q
         self.rho_ice = profile.rho_ice
         self.rho_water = profile.rho_water
 
@@ -213,6 +223,15 @@ class LateralIceStream:
         # Initialize jacobian function
         self.fjac = jax.jacfwd(self.compute_pde_values, 0)
 
+    def update_nu(self, u):
+        """
+        Computes effective viscosity for a given velocity profile.
+        """
+        n, A = self.n, self.A
+        D = self.profile.D
+        Du = np.dot(D, u)
+        self.nu = A**(-1 / n) / (np.abs(Du)**((n - 1) / n) + self.nu_eps)
+
     def compute_pde_values(self, u, scale=1.0e-2, return_components=False):
         """
         Parameters
@@ -233,9 +252,9 @@ class LateralIceStream:
         """
 
         # Cache some parameters to use here
-        g, n, m, W, A, mu = [
+        g, n, m, q, W, A, mu, nu = [
             getattr(self, attr) for attr in 
-            ('g', 'n', 'm', 'W', 'A', 'mu')
+            ('g', 'n', 'm', 'q', 'W', 'A', 'mu', 'nu')
         ]
 
         # Cache some variables from the profile
@@ -250,16 +269,13 @@ class LateralIceStream:
         # Compute gradient of velocity profile
         Du = np.dot(D, u)
 
-        # Dynamic viscosity
-        nu = A**(-1 / n) / (np.abs(Du)**((n - 1) / n) + self.nu_eps)
-
         # Membrane stresses
         membrane = scale * 2.0 * np.dot(D, h * nu * Du)
 
-        # Basal drag
+        # Basal drag scaled by effective pressure
         absu = np.abs(u)
         usign = u / absu
-        basal_drag = scale * usign * mu * (self.Hf * absu)**(1 / m)
+        basal_drag = scale * usign * mu * (self.Hf**q) * (absu**(1 / m))
 
         # Lateral drag
         lateral_drag = scale * 2 * usign * h / W * (5 * absu / (A * W))**(1 / n)
