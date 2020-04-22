@@ -9,7 +9,12 @@ from .timeutils import *
 from .matutils import *
 from .constants import *
 from .visualization import *
-from .correlate import *
+
+# Correlation requires OpenCV
+try:
+    from .correlate import *
+except ImportError:
+    pass
 
 # Submodules
 from . import tseries
