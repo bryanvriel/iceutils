@@ -39,7 +39,7 @@ def main(args):
     stack = ice.Stack(args.stackfile)
 
     # Compute mean
-    mean = np.nanmean(stack[args.key][()], axis=0)
+    mean = np.nanmean(stack[args.key], axis=0)
 
     # If model directory is given, load model stack (full fit)
     mstack = None
@@ -93,7 +93,7 @@ def main(args):
             sigma = 1.0 / w
             axts.errorbar(stack.tdec, d, yerr=sigma, fmt='o')
         else:
-            axts.plot(stack.tdec, d, 'o')
+            axts.plot(stack.tdec, d)
 
         if mstack is not None:
             fit = mstack.timeseries(xy=(x, y), key='data')
