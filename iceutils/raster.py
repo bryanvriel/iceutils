@@ -127,6 +127,10 @@ class Raster:
         """
         Resample raster data to another coordinate system provided by a RasterInfo object.
         """
+        # If RasterInfo objects are equivalent, do nothing
+        if hdr == self.hdr:
+            return
+
         # Interpolate
         data = interpolate_raster(self, None, None, ref_hdr=hdr, order=order)
 
@@ -134,6 +138,21 @@ class Raster:
         self.data = data
         self.hdr = hdr
         
+        return
+
+    def downsample(self, factor=2):
+        """
+        Downsamples by an integer factor.
+        """
+        from skimage.transform import downscale_local_mean
+
+        # Perform downscaling via local mean 
+        self.data = downscale_local_mean(self.data, (factor, factor))
+
+        # Create new header
+        X, Y = [arr[::factor, ::factor] for arr in self.hdr.meshgrid()]
+        self.hdr = RasterInfo(X=X, Y=Y)
+
         return
 
     def crop(self, xmin, xmax, ymin, ymax):
@@ -487,7 +506,7 @@ def interpolate_array(array, hdr, x, y, ref_hdr=None, order=3):
                              mode='constant', cval=np.nan)
 
     # Recover original shape and return
-    return values.reshape(x.shape)
+    return values.reshape(x.shape)    
 
 def write_array_as_raster(array, hdr, filename, epsg=None, dtype=None):
     """
