@@ -19,6 +19,19 @@ gdal_type_to_numpy = {
     gdal.GDT_CFloat64: np.complex128
 }
 
+# Map from numpy dtype to GDAL data type
+numpy_to_gdal_type = {
+    '|i1': gdal.GDT_Byte,
+    '<i2': gdal.GDT_Int16,
+    '<i4': gdal.GDT_Int32,
+    '<u2': gdal.GDT_UInt16,
+    '<u4': gdal.GDT_UInt32,
+    '<f4': gdal.GDT_Float32,
+    '<f8': gdal.GDT_Float64,
+    '<c8': gdal.GDT_CFloat32,
+    '<c16': gdal.GDT_CFloat64
+}
+
 class Raster:
     """
     Class that encapsulates raster data and stores an instance of its header info.
@@ -114,6 +127,10 @@ class Raster:
         """
         Resample raster data to another coordinate system provided by a RasterInfo object.
         """
+        # If RasterInfo objects are equivalent, do nothing
+        if hdr == self.hdr:
+            return
+
         # Interpolate
         data = interpolate_raster(self, None, None, ref_hdr=hdr, order=order)
 
@@ -121,6 +138,21 @@ class Raster:
         self.data = data
         self.hdr = hdr
         
+        return
+
+    def downsample(self, factor=2):
+        """
+        Downsamples by an integer factor.
+        """
+        from skimage.transform import downscale_local_mean
+
+        # Perform downscaling via local mean 
+        self.data = downscale_local_mean(self.data, (factor, factor))
+
+        # Create new header
+        X, Y = [arr[::factor, ::factor] for arr in self.hdr.meshgrid()]
+        self.hdr = RasterInfo(X=X, Y=Y)
+
         return
 
     def crop(self, xmin, xmax, ymin, ymax):
@@ -474,6 +506,21 @@ def interpolate_array(array, hdr, x, y, ref_hdr=None, order=3):
                              mode='constant', cval=np.nan)
 
     # Recover original shape and return
-    return values.reshape(x.shape)
+    return values.reshape(x.shape)    
+
+def write_array_as_raster(array, hdr, filename, epsg=None, dtype=None):
+    """
+    Convenience function to write a NumPy array to a raster file with a given RasterInfo.
+    """
+    # Check shapes
+    assert array.shape == (hdr.ny, hdr.nx), 'Incompatible shapes'
+    # Write raster
+    raster = Raster(data=array, hdr=hdr)
+    # Try to determine dtype if not passed
+    if dtype is None:
+        dtype = np.dtype(array.dtype)
+        dtype = numpy_to_gdal_type[dtype.str]
+    # Write
+    raster.write_gdal(filename, epsg=epsg, dtype=dtype)
 
 # end of file
