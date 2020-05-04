@@ -535,21 +535,52 @@ def interpolate_array(array, hdr, x, y, ref_hdr=None, order=3):
     # Recover original shape and return
     return values.reshape(x.shape) 
 
-def warp(raster, target_hdr, k=3):
+def warp(raster, target_epsg=None, target_hdr=None, k=3):
     """
     Warp raster to another RasterInfo hdr object with a different projection system.
     Currently only supports EPSG projection representations.
     """
-    # Check that target and source RasterInfo both have EPSG set
+    # Check source RasterInfo has EPSG value set
     assert raster.hdr.epsg is not None, 'No EPSG information found for source raster.'
-    assert target_hdr.epsg is not None, 'No EPSG information found for target raster.'
 
     # Create projection objects
     src_proj = pyproj.Proj('EPSG:%d' % raster.hdr.epsg)
-    trg_proj = pyproj.Proj('EPSG:%d' % target_hdr.epsg)
+    if target_epsg is None and target_hdr is not None:
+        assert target_hdr.epsg is not None, 'No EPSG information found for target raster.'
+        trg_proj = pyproj.Proj('EPSG:%d' % target_hdr.epsg)
+    elif target_epsg is not None:
+        trg_proj = pyproj.Proj('EPSG:%d' % target_epsg)
+    else:
+        raise ValueError('Must supply EPSG or RasterInfo to specify target projection.')
+
+    # If only EPSG code is provided, compute target grid
+    if target_hdr is None:
     
-    # Convert target coordinates to source
-    trg_x, trg_y = target_hdr.meshgrid()
+        # Convert bounding coordinates from source to target projection
+        src_xmin, src_xmax = raster.hdr.xlim
+        src_ymin, src_ymax = raster.hdr.ylim
+        x0, y0 = pyproj.transform(src_proj, trg_proj, src_xmin, src_ymax, always_xy=True)
+        x1, y1 = pyproj.transform(src_proj, trg_proj, src_xmax, src_ymax, always_xy=True)
+        x2, y2 = pyproj.transform(src_proj, trg_proj, src_xmax, src_ymin, always_xy=True)
+        x3, y3 = pyproj.transform(src_proj, trg_proj, src_xmin, src_ymin, always_xy=True)
+        xvals = np.array([x0, x1, x2, x3])
+        yvals = np.array([y0, y1, y2, y3])
+        trg_xmin, trg_xmax = np.min(xvals), np.max(xvals)
+        trg_ymin, trg_ymax = np.min(yvals), np.max(yvals)
+        
+        # Construct meshgrid with same dimensions (may be a bad idea in polar regions)
+        xarr = np.linspace(trg_xmin, trg_xmax, raster.hdr.nx)
+        yarr = np.linspace(trg_ymax, trg_ymin, raster.hdr.ny)
+        trg_x, trg_y = np.meshgrid(xarr, yarr)
+
+        # Create a RasterInfo object for target
+        target_hdr = RasterInfo(X=trg_x, Y=trg_y, epsg=target_epsg)
+
+    # Otherwise, get meshgrid straight from target_hdr
+    else:
+        trg_x, trg_y = target_hdr.meshgrid()
+
+    # Convert target coordinates to source coordinates
     src_x, src_y = pyproj.transform(trg_proj, src_proj, trg_x, trg_y, always_xy=True)
 
     # Interpolate source raster
