@@ -84,9 +84,9 @@ raster.write_gdal('output.dat', driver='ENVI', epsg=3413)
 ```
 Any GDAL-compatible driver can be passed to the `driver` keyword argument. Additionally, one can pass in an EPSG code to specify the coordinate system of the data in order for GDAL to write relevant projection data.
 
-### Resampling a raster to the region of another raster
+### Resampling a raster to the region of another raster (with same projection)
 
-Let's say we have a raster covering a geographic area, and we wish to resample the data to the geographic area of another raster. This can be done using the `Raster.resample` function:
+Let's say we have a raster covering a geographic area, and we wish to resample the data to the geographic area of another raster with _the same projection_. This can be done using the `Raster.resample` function:
 ```python
 # First raster
 raster = ice.Raster(rasterfile='velocity.tif')
@@ -96,6 +96,33 @@ ref_raster = ice.Raster(rasterfile='velocity2.tif')
 
 # Resample first raster to area of second
 raster.resample(ref_raster.hdr)
+```
+
+### Resampling a raster to the region of another raster (with a different projection)
+
+In some cases, we would like to resample a raster to a geographic area with a _different_ projection (warping). In this case, the target geographic region can be specified by an EPSG code or by a separate `RasterInfo` object, either from an existing raster or created on-the-fly. For example, to warp a latitude-longitude raster to Polar Stereographic defined by a separate raster:
+```python
+# Source raster in latitude-longitude (EPSG: 4326)
+src_raster = ice.Raster(rasterfile='velocity_latlon.tif')
+
+# Another raster in polar stereographic north (EPSG: 3413)
+trg_raster = ice.Raster(rasterfile='velocity_polar.tif')
+
+# Warp source raster
+ice.warp(src_raster, target_hdr=trg_raster.hdr)
+```
+We can also pre-construct the target coordinates in memory and create a `RasterInfo` object on the fly:
+```python
+# Meshgrid of target coordinates in polar stereographic
+x = np.linspace(1000, 3000, 100)
+y = np.linspace(-2200, -2400, 100)
+X, Y = np.meshgrid(x, y)
+
+# Create RasterInfo
+trg_hdr = ice.RasterInfo(X=X, Y=Y, epsg=3413)
+
+# Warp source raster
+ice.warp(src_raster, target_hdr=trg_hdr)
 ```
 
 ### Converting between projection and image coordinates
