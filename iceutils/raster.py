@@ -2,8 +2,10 @@
 
 import numpy as np
 from scipy.ndimage.interpolation import map_coordinates
+import pyproj
 import h5py
 import gdal
+import osr
 import sys
 
 # Map from GDAL data type to numpy
@@ -110,6 +112,8 @@ class Raster:
         ds = driver.Create(filename, xsize=self.hdr.nx, ysize=self.hdr.ny, bands=1, eType=dtype)
 
         # Create geotransform and projection
+        if epsg is None and self.hdr._epsg is not None:
+            epsg = self.hdr._epsg
         if epsg is not None:
             from osgeo import osr
             ds.SetGeoTransform(self.hdr.geotransform)
@@ -199,7 +203,7 @@ class RasterInfo:
     """
 
     def __init__(self, rasterfile=None, stackfile=None, X=None, Y=None,
-                 band=1, islice=None, jslice=None):
+                 band=1, epsg=None, islice=None, jslice=None):
         """
         Initialize attributes.
         """
@@ -208,9 +212,10 @@ class RasterInfo:
         elif stackfile is not None:
             self.load_stack_info(stackfile, islice=islice, jslice=jslice)
         elif X is not None and Y is not None:
-            self.set_from_meshgrid(X, Y)
+            self.set_from_meshgrid(X, Y, epsg=epsg)
         else:
             self.xstart = self.dx = self.ystart = self.dy = self.ny = self.nx = None
+            self._epsg = None
 
     def load_gdal_info(self, rasterfile, islice=None, jslice=None, band=1):
         """
@@ -229,6 +234,11 @@ class RasterInfo:
         except AttributeError:
             self.ystart = self.xstart = 0.0
             self.dx = self.dy = 1.0
+
+        # Extract projection information as an EPSG code
+        proj = osr.SpatialReference(wkt=dset.GetProjection())
+        proj.AutoIdentifyEPSG()
+        self._epsg = int(proj.GetAttrValue('AUTHORITY', 1))
             
         # Incorporate row slicing
         if islice is not None:
@@ -279,10 +289,16 @@ class RasterInfo:
             self.dy = Y[1] - Y[0]
             self.ny, self.nx = Y.size, X.size
 
+            # Try to read EPSG code
+            try:
+                self._epsg = fid.attrs['EPSG']
+            except KeyError:
+                self._epsg = None
+
             # Set units
             self.units = 'm'
 
-    def set_from_meshgrid(self, X, Y, units='m'):
+    def set_from_meshgrid(self, X, Y, epsg=None, units='m'):
         """
         Set header information from meshgrid array.s
         """
@@ -291,6 +307,7 @@ class RasterInfo:
         self.dx = X[0,1] - X[0,0]
         self.dy = Y[1,0] - Y[0,0]
         self.ny, self.nx = X.shape
+        self._epsg = epsg
         self.units = units
 
     def crop(self, xmin, xmax, ymin, ymax):
@@ -375,6 +392,16 @@ class RasterInfo:
         Return GDAL-compatible geo transform array.
         """
         return [self.xstart, self.dx, 0.0, self.ystart, 0.0, self.dy]
+
+    @property
+    def epsg(self):
+        """
+        Return read-only EPSG code.
+        """
+        return self._epsg
+    @epsg.setter
+    def epsg(self, value):
+        raise NotImplementedError('Cannot set EPSG value explicitly.')
 
     @property
     def extent(self):
@@ -506,7 +533,30 @@ def interpolate_array(array, hdr, x, y, ref_hdr=None, order=3):
                              mode='constant', cval=np.nan)
 
     # Recover original shape and return
-    return values.reshape(x.shape)    
+    return values.reshape(x.shape) 
+
+def warp(raster, target_hdr, k=3):
+    """
+    Warp raster to another RasterInfo hdr object with a different projection system.
+    Currently only supports EPSG projection representations.
+    """
+    # Check that target and source RasterInfo both have EPSG set
+    assert raster.hdr.epsg is not None, 'No EPSG information found for source raster.'
+    assert target_hdr.epsg is not None, 'No EPSG information found for target raster.'
+
+    # Create projection objects
+    src_proj = pyproj.Proj('EPSG:%d' % raster.hdr.epsg)
+    trg_proj = pyproj.Proj('EPSG:%d' % target_hdr.epsg)
+    
+    # Convert target coordinates to source
+    trg_x, trg_y = target_hdr.meshgrid()
+    src_x, src_y = pyproj.transform(trg_proj, src_proj, trg_x, trg_y, always_xy=True)
+
+    # Interpolate source raster
+    data = interpolate_raster(raster, src_x, src_y)
+
+    # Return new raster
+    return Raster(data=data, hdr=target_hdr)
 
 def write_array_as_raster(array, hdr, filename, epsg=None, dtype=None):
     """
