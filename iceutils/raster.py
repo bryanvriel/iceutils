@@ -535,7 +535,7 @@ def interpolate_array(array, hdr, x, y, ref_hdr=None, order=3):
     # Recover original shape and return
     return values.reshape(x.shape) 
 
-def warp(raster, target_epsg=None, target_hdr=None, k=3):
+def warp(raster, target_epsg=None, target_hdr=None, order=3, n_proc=1):
     """
     Warp raster to another RasterInfo hdr object with a different projection system.
     Currently only supports EPSG projection representations.
@@ -580,14 +580,28 @@ def warp(raster, target_epsg=None, target_hdr=None, k=3):
     else:
         trg_x, trg_y = target_hdr.meshgrid()
 
-    # Convert target coordinates to source coordinates
-    src_x, src_y = pyproj.transform(trg_proj, src_proj, trg_x, trg_y, always_xy=True)
+    # Perform transformation on chunks in parallel
+    import pymp
+    data_warped = pymp.shared.array(trg_y.shape, dtype=raster.data.dtype)
+    chunks = get_chunks(trg_x.shape, 128, 128)
+    n_chunks = len(chunks)
 
-    # Interpolate source raster
-    data = interpolate_raster(raster, src_x, src_y)
+    # Loop over chunks
+    with pymp.Parallel(n_proc) as manager:
+        for k in manager.range(n_chunks):
+
+            # Convert target coordinates to source coordinates
+            islice, jslice = chunks[k]
+            src_x, src_y = pyproj.transform(trg_proj, src_proj,
+                                            trg_x[islice, jslice],
+                                            trg_y[islice, jslice],
+                                            always_xy=True)
+
+            # Interpolate source raster
+            data_warped[islice, jslice] = interpolate_raster(raster, src_x, src_y, order=order)
 
     # Return new raster
-    return Raster(data=data, hdr=target_hdr)
+    return Raster(data=data_warped, hdr=target_hdr)
 
 def write_array_as_raster(array, hdr, filename, epsg=None, dtype=None):
     """
@@ -603,5 +617,53 @@ def write_array_as_raster(array, hdr, filename, epsg=None, dtype=None):
         dtype = numpy_to_gdal_type[dtype.str]
     # Write
     raster.write_gdal(filename, epsg=epsg, dtype=dtype)
+
+
+def get_chunks(dims, chunk_y, chunk_x):
+    """
+    Utility function to get chunk bounds.
+
+    Parameters
+    ----------
+    dims: tuples for dimensions
+        (Ny, Nx) dimensions.
+    chunk_y: int
+        Size of chunk in vertical dimension.
+    chunk_x: int
+        Size of chunk in horizontal dimension.
+
+    Returns
+    -------
+    chunks: list
+        List of all chunks in the image.
+    """
+    # First determine the number of chunks in each dimension
+    Ny, Nx = dims
+    Ny_chunk = int(Ny // chunk_y)
+    Nx_chunk = int(Nx // chunk_x)
+    if Ny % chunk_y != 0:
+        Ny_chunk += 1
+    if Nx % chunk_x != 0:
+        Nx_chunk += 1
+
+    # Now construct chunk bounds
+    chunks = []
+    for i in range(Ny_chunk):
+        if i == Ny_chunk - 1:
+            nrows = Ny - chunk_y * i
+        else:
+            nrows = chunk_y
+        istart = chunk_y * i
+        iend = istart + nrows
+        for j in range(Nx_chunk):
+            if j == Nx_chunk - 1:
+                ncols = Nx - chunk_x * j
+            else:
+                ncols = chunk_x
+            jstart = chunk_x * j
+            jend = jstart + ncols
+            chunks.append([slice(istart,iend), slice(jstart,jend)])
+
+    return chunks
 
 # end of file
