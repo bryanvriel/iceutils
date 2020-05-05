@@ -10,6 +10,7 @@ import copy
 import sys
 import os
 
+from ..raster import get_chunks
 from ..stack import Stack
 from .LinearRegression import *
 from .model import build_temporal_model
@@ -46,7 +47,7 @@ def inversion(stack, userfile, outdir, cleaned_stack=None,
 
     # Get list of chunks
     _, chunk_ny, chunk_nx = stack['chunk_shape'][()]
-    chunks = get_chunks(stack, chunk_ny, chunk_nx)
+    chunks = get_chunks((stack.Ny, stack.Nx), chunk_ny, chunk_nx)
     
     # Instantiate and initialize output stacks
     ostacks = {}
@@ -303,51 +304,5 @@ def butterworth_coeffs(frequency=None, period=None, dt=1.0, order=3, btype='low'
     # Compute Butterworth filter coefficients
     b, a = signal.butter(order, w_low, btype=btype)
     return b,a
-    
-def get_chunks(stack, chunk_y, chunk_x):
-    """
-    Utility function to get chunk bounds.
-
-    Parameters
-    ----------
-    stack: Stack
-        Stack instance.
-    chunk_y: int
-        Size of chunk in vertical dimension.
-    chunk_x: int
-        Size of chunk in horizontal dimension.
-
-    Returns
-    -------
-    chunks: list
-        List of all chunks in the image.
-    """
-    # First determine the number of chunks in each dimension
-    Ny_chunk = int(stack.Ny // chunk_y)
-    Nx_chunk = int(stack.Nx // chunk_x)
-    if stack.Ny % chunk_y != 0:
-        Ny_chunk += 1
-    if stack.Nx % chunk_x != 0:
-        Nx_chunk += 1
-
-    # Now construct chunk bounds
-    chunks = []
-    for i in range(Ny_chunk):
-        if i == Ny_chunk - 1:
-            nrows = stack.Ny - chunk_y * i
-        else:
-            nrows = chunk_y
-        istart = chunk_y * i
-        iend = istart + nrows
-        for j in range(Nx_chunk):
-            if j == Nx_chunk - 1:
-                ncols = stack.Nx - chunk_x * j
-            else:
-                ncols = chunk_x
-            jstart = chunk_x * j
-            jend = jstart + ncols
-            chunks.append([slice(istart,iend), slice(jstart,jend)])
-
-    return chunks 
 
 # end of file
