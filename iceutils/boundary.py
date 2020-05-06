@@ -141,14 +141,14 @@ def load_kml(kmlfile):
     """
     Convenience function to parse a KML file to get the coordinates.
     """
-    from pykml import parser
+    import xml.etree.ElementTree as ET
 
     # Parse the file
-    with open(kmlfile, 'r') as fid:
-        doc = parser.parse(fid)
+    tree = ET.parse(kmlfile)
+    root = tree.getroot()
 
-    # Iterate
-    for child in doc.iter():
+    # Iterate over main KML document
+    for child in root.iter():
         tag = child.tag.split('}')[-1]
         if tag == 'coordinates':
 

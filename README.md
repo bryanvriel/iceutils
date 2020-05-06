@@ -8,20 +8,18 @@ matplotlib
 gdal
 h5py
 pyproj
-pykml
 pymp
 scikit-learn
 tqdm
 cvxopt
 pint
 ```
-With the exception of `pykml`, `pymp`, and `pint`, all of the packages can be installed via Anaconda using their main channel. The installation process can be streamlined by copying those packages into a `requirements.txt` file and running:
+With the exception of `pymp` and `pint`, all of the packages can be installed via Anaconda using their main channel. The installation process can be streamlined by copying those packages into a `requirements.txt` file and running:
 ```
 conda install --file requirements.txt
 ```
 The remaining packages can be installed with pip:
 ```
-pip install pykml
 pip install pymp-pypi
 pip install pint
 ```
