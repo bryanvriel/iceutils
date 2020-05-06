@@ -196,6 +196,60 @@ class Raster:
         i, j = coord
         return self.data[i,j]
 
+    def __add__(self, other):
+        """
+        Addition between two rasters.
+        """
+        # Check RasterInfo consistency
+        assert self.hdr == other.hdr, 'RasterInfo objects not equal.'
+        # Perform addition and return a new Raster
+        data = self.data + other.data
+        return Raster(data=data, hdr=self.hdr)
+
+    def __sub__(self, other):
+        """
+        Subtraction between two rasters.
+        """
+        # Check RasterInfo consistency
+        assert self.hdr == other.hdr, 'RasterInfo objects not equal.'
+        # Perform subtraction and return a new Raster
+        data = self.data - other.data
+        return Raster(data=data, hdr=self.hdr)
+
+    def __mul__(self, other):
+        """
+        Multiplication between two rasters.
+        """
+        # Check RasterInfo consistency
+        assert self.hdr == other.hdr, 'RasterInfo objects not equal.'
+        # Perform multiplication and return a new Raster
+        data = self.data * other.data
+        return Raster(data=data, hdr=self.hdr)
+
+    def __truediv__(self, other):
+        """
+        Floating point division between two rasters.
+        """
+        # Check RasterInfo consistency
+        assert self.hdr == other.hdr, 'RasterInfo objects not equal.'
+        # Perform division and return a new Raster
+        data = self.data / other.data
+        return Raster(data=data, hdr=self.hdr)
+
+    def __pow__(self, exponent):
+        """
+        Raise Raster data to a power.
+        """
+        # Raise to power and return a new Raster
+        data = self.data**exponent
+        return Raster(data=data, hdr=self.hdr)
+
+    def sqrt(self):
+        """
+        Return square root of data. Used for NumPy compatibility.
+        """
+        return np.sqrt(self.data)
+
 
 class RasterInfo:
     """
