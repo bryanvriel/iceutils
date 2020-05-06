@@ -618,6 +618,60 @@ def write_array_as_raster(array, hdr, filename, epsg=None, dtype=None):
     # Write
     raster.write_gdal(filename, epsg=epsg, dtype=dtype)
 
+def render_kml(raster, filename, dpi=300, cmap='viridis', clim=None, n_proc=1):
+    """
+    Renders Raster data to an image and creates a KML for viewing in Google Earth.
+
+    Parameters
+    ----------
+    raster: Raster
+        Raster to render to KML.
+    filename: str
+        Name of output KML file.
+    dpi: int
+        DPI of saved PNG file. Default: 300.
+    cmap: {str, matplotlib.colors.ListedColormap}, optional
+        Colormap for plotting data. Default: 'viridis'.
+    clim: {tuple, None}, optional
+        Color limit for plotting data. Default: None.
+    n_proc: int, optional
+        Number of processors for warping raster if not in EPSG:4326. Default: 1.
+
+    Returns
+    -------
+    None
+    """
+    import matplotlib.pyplot as plt
+    import simplekml
+
+    # First warp raster if not provided in EPSG:4326 projection
+    if raster.hdr.epsg != 4326:
+        raster = warp(raster, target_epsg=4326, order=1, n_proc=n_proc)
+
+    # Make an image
+    fig, ax = plt.subplots(figsize=(11,7))
+    im = ax.imshow(raster.data, extent=raster.hdr.extent, cmap=cmap, clim=clim)
+    ax.axis('off')
+    
+    # Save to PNG
+    froot = filename.split('.')[0]
+    pngfile = froot + '.png'
+    fig.savefig(pngfile, dpi=dpi, bbox_inches='tight', pad_inches=0.0)
+
+    # Get coordinate bounds
+    west, east, south, north = raster.hdr.extent
+
+    # Make KML
+    kml = simplekml.Kml()
+    ground = kml.newgroundoverlay(name='GroundOverlay')
+    ground.icon.href = pngfile
+    ground.latlonbox.north = north
+    ground.latlonbox.south = south
+    ground.latlonbox.east = east
+    ground.latlonbox.west = west
+    kml.save(filename)
+
+    return
 
 def get_chunks(dims, chunk_y, chunk_x):
     """
