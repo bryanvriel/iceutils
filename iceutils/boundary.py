@@ -3,6 +3,7 @@
 import numpy as np
 from scipy.interpolate import UnivariateSpline
 from matplotlib.path import Path
+import pyproj
 import sys
 
 class Boundary:
@@ -137,7 +138,7 @@ def load_termini_gmt(files, name='Jakobshavn'):
     # Done
     return termini
 
-def load_kml(kmlfile):
+def load_kml(kmlfile, out_epsg=4326):
     """
     Convenience function to parse a KML file to get the coordinates.
     """
@@ -165,6 +166,13 @@ def load_kml(kmlfile):
                 lon[i] = x
                 lat[i] = y
 
-    return lon, lat
+    # Perform transformation if another EPSG is specified
+    if out_epsg != 4326:
+        proj = pyproj.Proj('EPSG:%d' % out_epsg)
+        wgs84 = pyproj.Proj('EPSG:4326')
+        x, y = pyproj.transform(wgs84, proj, lon, lat, always_xy=True)
+        return x, y
+    else:
+        return lon, lat
 
 # end of file    
