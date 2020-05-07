@@ -184,6 +184,8 @@ class RidgeRegression(LinearRegression):
 
         Returns
         -------
+        status: int
+            Integer flag for failure or success.
         m: (N,) np.ndarray
             Output parameter vector.
         m_wgt: (N,) np.ndarray, optional
@@ -271,6 +273,8 @@ class LassoRegression(LinearRegression):
 
         Returns
         -------
+        status: int
+            Integer flag for failure or success.
         m: (N,) np.ndarray
             Output parameter vector.
         m_wgt: (N,) np.ndarray, optional
@@ -490,6 +494,8 @@ class OrthogonalMatchingPursuit(LinearRegression):
 
         Returns
         -------
+        status: int
+            Integer flag for failure or success.
         m: (N,) np.ndarray
             Output parameter vector.
         m_wgt: (N,) np.ndarray, optional
