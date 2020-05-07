@@ -589,7 +589,7 @@ def interpolate_array(array, hdr, x, y, ref_hdr=None, order=3):
     # Recover original shape and return
     return values.reshape(x.shape) 
 
-def warp(raster, target_epsg=None, target_hdr=None, order=3, n_proc=1):
+def warp(raster, target_epsg=None, target_hdr=None, target_dims=None, order=3, n_proc=1):
     """
     Warp raster to another RasterInfo hdr object with a different projection system.
     Currently only supports EPSG projection representations.
@@ -621,10 +621,16 @@ def warp(raster, target_epsg=None, target_hdr=None, order=3, n_proc=1):
         yvals = np.array([y0, y1, y2, y3])
         trg_xmin, trg_xmax = np.min(xvals), np.max(xvals)
         trg_ymin, trg_ymax = np.min(yvals), np.max(yvals)
+
+        # Get target dimensions from user input or source raster
+        if target_dims is not None:
+            out_ny, out_nx = target_dims
+        else:
+            out_ny, out_nx = raster.hdr.ny, raster.hdr.nx
         
         # Construct meshgrid with same dimensions (may be a bad idea in polar regions)
-        xarr = np.linspace(trg_xmin, trg_xmax, raster.hdr.nx)
-        yarr = np.linspace(trg_ymax, trg_ymin, raster.hdr.ny)
+        xarr = np.linspace(trg_xmin, trg_xmax, out_nx)
+        yarr = np.linspace(trg_ymax, trg_ymin, out_ny)
         trg_x, trg_y = np.meshgrid(xarr, yarr)
 
         # Create a RasterInfo object for target
@@ -700,17 +706,18 @@ def render_kml(raster, filename, dpi=300, cmap='viridis', clim=None, n_proc=1):
 
     # First warp raster if not provided in EPSG:4326 projection
     if raster.hdr.epsg != 4326:
+        print('warping')
         raster = warp(raster, target_epsg=4326, order=1, n_proc=n_proc)
 
     # Make an image
     fig, ax = plt.subplots(figsize=(11,7))
-    im = ax.imshow(raster.data, extent=raster.hdr.extent, cmap=cmap, clim=clim)
+    im = ax.imshow(raster.data, cmap=cmap, clim=clim)
     ax.axis('off')
     
     # Save to PNG
     froot = filename.split('.')[0]
     pngfile = froot + '.png'
-    fig.savefig(pngfile, dpi=dpi, bbox_inches='tight', pad_inches=0.0)
+    fig.savefig(pngfile, dpi=dpi, bbox_inches='tight', pad_inches=0.0, transparent=True)
 
     # Get coordinate bounds
     west, east, south, north = raster.hdr.extent
