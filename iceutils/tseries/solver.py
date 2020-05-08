@@ -10,6 +10,7 @@ import copy
 import sys
 import os
 
+from ..constants import *
 from ..raster import get_chunks
 from ..stack import Stack
 from .LinearRegression import *
@@ -43,7 +44,7 @@ def inversion(stack, userfile, outdir, cleaned_stack=None,
     # Instantiate a solver
     solver = select_solver(solver_type, reg_indices=model.itransient, rw_iter=rw_iter,
                            regMat=regMat, robust=robust, penalty=regParam,
-                           n_nonzero_coefs=n_nonzero_coefs)
+                           n_nonzero_coefs=n_nonzero_coefs, n_min=n_min)
 
     # Get list of chunks
     _, chunk_ny, chunk_nx = stack['chunk_shape'][()]
@@ -97,20 +98,12 @@ def inversion(stack, userfile, outdir, cleaned_stack=None,
         # Loop over pixels in chunk in parallel
         with pymp.Parallel(n_proc) as manager:
             for index in manager.range(npix):
-
-                # Get time series
-                d = data[:,index]
-                w = wgts[:,index]
-                valid_mask = np.isfinite(d)
-                nfinite = len(valid_mask.nonzero()[0])
-                if nfinite < n_min:
-                    continue
-
+                
                 # Perform inversion: iterative least squares with outlier detection
                 # Outliers are set to NaN in-place
-                m, Cm = iterate_lsqr(solver, data_model, G, d, w, n_iter=n_iter, n_min=n_min)
+                status, m, Cm = iterate_lsqr(solver, data_model, G, d, w, n_iter=n_iter)
                 # Check if least squares failed
-                if m is None:
+                if status == FAIL:
                     continue
 
                 # Compute prediction and store in arrays
@@ -150,11 +143,12 @@ def iterate_lsqr(solver, model, G, d, w, n_iter=5, n_std=3.0, n_min=20):
     for iternum in range(n_iter):
     
         # Fit
-        mask = np.isfinite(d)
-        dsub = d[mask]
-        if len(dsub) < n_min:
-            return None, None
-        m, Cm = solver.invert(G[mask], d[mask], wgt=w[mask])
+        status, m, Cm = solver.invert(G, d, wgt=w)
+        # Check status
+        if status == FAIL:
+            return status, None, None
+    
+        # Predict
         pred = model.predict(m)
 
         # Compute outliers
@@ -167,7 +161,7 @@ def iterate_lsqr(solver, model, G, d, w, n_iter=5, n_std=3.0, n_min=20):
         w[outliers] = np.nan
 
     # Done
-    return m, Cm
+    return SUCCESS, m, Cm
 
 def inversion_points(stack, userfile, x, y, solver_type='lsqr',
                      nt_out=200, n_proc=8, regParam=1.0, rw_iter=1, robust=False,
@@ -190,7 +184,7 @@ def inversion_points(stack, userfile, x, y, solver_type='lsqr',
     # Instantiate a solver
     solver = select_solver(solver_type, reg_indices=model.itransient, rw_iter=rw_iter,
                            regMat=regMat, robust=robust, penalty=regParam,
-                           n_nonzero_coefs=n_nonzero_coefs)
+                           n_nonzero_coefs=n_nonzero_coefs, n_min=n_min)
     
     # Create shared arrays for results
     shape = (n_pts, len(tfit))
@@ -208,14 +202,10 @@ def inversion_points(stack, userfile, x, y, solver_type='lsqr',
             if d is None:
                 continue
 
-            # Check number of valid data
-            mask = np.isfinite(d)
-            nfinite = len(mask.nonzero()[0])
-            if nfinite < n_min:
-                continue
-
             # Perform inversion
-            m, Cm = solver.invert(G[mask,:], d[mask], wgt=w[mask])
+            status, m, Cm = solver.invert(G, d, wgt=w)
+            if status == FAIL:
+                continue
 
             # Compute prediction and store in arrays
             pred = model.predict(m, sigma=False)
