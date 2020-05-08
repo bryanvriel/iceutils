@@ -1,5 +1,6 @@
 #-*- coding: utf-8 -*-
 
+import warnings
 import functools
 import numpy as np
 from ..matutils import dmultl
@@ -8,13 +9,37 @@ from sklearn.linear_model import orthogonal_mp_gram, RANSACRegressor
 import sys
 solvers.options['show_progress'] = False
 
-from ..constants import NULL_REG
+from ..constants import NULL_REG, FAIL, SUCCESS
 
 def select_solver(solver_type, reg_indices=None, rw_iter=1, regMat=None, robust=False,
-                  penalty=1.0, n_nonzero_coefs=10):
+                  penalty=1.0, n_nonzero_coefs=10, n_min=20):
     """
     Factory for instantiating a linear regression solver with the correct options
     and returning it.
+
+    Parameters
+    ----------
+    solver_type: str,
+        Name of solver from ('lasso', 'ridge', 'omp', 'lsqr').
+    reg_indices: array_like, optional
+        Integer indices for elements to be regularized. Default: None.
+    rw_iter: int, optional
+        Number of re-weighting iterations for Lasso solver. Default: 1.
+    regMat: ndarray, optional
+        Extra prior covariance matrix. Default: None.
+    robust: bool, optional
+        Use RANSAC regressor for lsqr solver. Default: False.
+    penalty: float, optional
+        Regularization penalty for lasso and ridge solvers. Default: 1.0.
+    n_nonzero_coefs: int, optional
+        Number of non-zero regularized elements for omp solver. Default: 10.
+    n_min: int, optional
+        Minimum number of valid data to perform inversion. Default: 20.
+
+    Returns
+    -------
+    solver: LinearRegression
+        Instantiated solver.
     """
     # Form regularization indices from regularization matrix (inverse covariance)
     if reg_indices is None and regMat is not None:
@@ -23,16 +48,17 @@ def select_solver(solver_type, reg_indices=None, rw_iter=1, regMat=None, robust=
     elif reg_indices is None:
         reg_indices = []
 
-
     # Instantiate a solver
     if solver_type == 'lasso':
-        solver = LassoRegression(reg_indices, penalty, regMat=regMat, rw_iter=rw_iter)
+        solver = LassoRegression(reg_indices, penalty, regMat=regMat, rw_iter=rw_iter,
+                                 n_min=n_min)
     elif solver_type == 'ridge':
-        solver = RidgeRegression(reg_indices, penalty, regMat=regMat)
+        solver = RidgeRegression(reg_indices, penalty, regMat=regMat, n_min=n_min)
     elif solver_type == 'omp':
-        solver = OrthogonalMatchingPursuit(n_nonzero_coefs=n_nonzero_coefs, regMat=regMat)
+        solver = OrthogonalMatchingPursuit(n_nonzero_coefs=n_nonzero_coefs, regMat=regMat,
+                                           n_min=n_min)
     elif solver_type == 'lsqr':
-        solver = LinearRegression(robust=robust)
+        solver = LinearRegression(robust=robust, n_min=n_min)
 
     # Done
     return solver
@@ -44,11 +70,12 @@ class LinearRegression:
     least squares.
     """
 
-    def __init__(self, robust=False, pinv=False, **kwargs):
+    def __init__(self, robust=False, pinv=False, n_min=20, **kwargs):
         """
         Initialize the LinearRegression class.
         """
         self.robust = robust
+        self.n_min = n_min
         if robust:
             self.ransac = RANSACRegressor(min_samples=10)
 
@@ -73,18 +100,27 @@ class LinearRegression:
 
         Returns
         -------
+        status: int
+            Integer flag for failure or success.
         m: (N,) np.ndarray
             Output parameter vector.
         m_wgt: (N,) np.ndarray, optional
             Weights for parameters.
         """
+        # Indices for finite data
+        mask = np.isfinite(d).nonzero()[0]
+        if mask.size < self.n_min:
+            warnings.warn('Not enough data for inversion. Returning None.')
+            return FAIL, None, None
+        Gf, df, wgt = self.apply_mask(mask, G, d, wgt=wgt)
+        
         # Prepare least squares data
         if wgt is not None:
-            GtG = np.dot(G.T, dmultl(wgt**2, G))
-            Gtd = np.dot(G.T, wgt**2 * d)
+            GtG = np.dot(Gf.T, dmultl(wgt**2, Gf))
+            Gtd = np.dot(Gf.T, wgt**2 * df)
         else:
-            GtG = np.dot(G.T, G)
-            Gtd = np.dot(G.T, d)
+            GtG = np.dot(Gf.T, Gf)
+            Gtd = np.dot(Gf.T, df)
         iGtG = self.inv_func(GtG)
 
         # Perform inversion
@@ -94,8 +130,18 @@ class LinearRegression:
             d[outlier_mask] = np.nan
         else:
             m = np.dot(iGtG, Gtd)
-        return m, iGtG
+        return SUCCESS, m, iGtG
 
+    @staticmethod
+    def apply_mask(mask, G, d, wgt=None):
+        """
+        Convenience function for returning subset of least squares specified by a logical mask.
+        """
+        if wgt is not None:
+            return G[mask], d[mask], wgt[mask]
+        else:
+            return G[mask], d[mask], None
+        
 
 class RidgeRegression(LinearRegression):
     """
@@ -138,11 +184,19 @@ class RidgeRegression(LinearRegression):
 
         Returns
         -------
+        status: int
+            Integer flag for failure or success.
         m: (N,) np.ndarray
             Output parameter vector.
         m_wgt: (N,) np.ndarray, optional
             Weights for parameters.
         """
+        # Indices for finite data
+        mask = np.isfinite(d).nonzero()[0]
+        if mask.size < self.n_min:
+            warnings.warn('Not enough data for inversion. Returning None.')
+            return FAIL, None, None
+        Gf, df, wgt = self.apply_mask(mask, G, d, wgt=wgt)
 
         # Cache the regularization matrix or compute it
         regMat = self.regMat
@@ -152,14 +206,14 @@ class RidgeRegression(LinearRegression):
        
         # Perform inversion 
         if wgt is not None:
-            GtG = np.dot(G.T, dmultl(wgt**2, G))
-            Gtd = np.dot(G.T, wgt**2 * d)
+            GtG = np.dot(Gf.T, dmultl(wgt**2, Gf))
+            Gtd = np.dot(Gf.T, wgt**2 * df)
         else:
-            GtG = np.dot(G.T, G)
-            Gtd = np.dot(G.T, d)
+            GtG = np.dot(Gf.T, Gf)
+            Gtd = np.dot(Gf.T, df)
         iGtG = self.inv_func(GtG + regMat)
         m = np.dot(iGtG, Gtd)
-        return m, iGtG
+        return SUCCESS, m, iGtG
 
 
 class LassoRegression(LinearRegression):
@@ -219,32 +273,41 @@ class LassoRegression(LinearRegression):
 
         Returns
         -------
+        status: int
+            Integer flag for failure or success.
         m: (N,) np.ndarray
             Output parameter vector.
         m_wgt: (N,) np.ndarray, optional
             Weights for parameters.
         """
+        # Indices for finite data
+        mask = np.isfinite(d).nonzero()[0]
+        if mask.size < self.n_min:
+            warnings.warn('Not enough data for inversion. Returning None.')
+            return FAIL, None, None
+        Gf, df, wgt = self.apply_mask(mask, G, d, wgt=wgt)
+
         arrflag = isinstance(self.penalty, np.ndarray)
         weightingFunc = self.weightingFunc
 
-        # Cache original input design matrix and data vector
-        G_input = G.copy()
-        d_input = d.copy()
+        # Cache design matrix and data vector
+        G_input = Gf.copy()
+        d_input = df.copy()
 
         # If weight array provided, pre-multiply design matrix and data
         if wgt is not None:
-            G = dmultl(wgt, G)
-            d = wgt * d
+            Gf = dmultl(wgt, Gf)
+            df = wgt * df
 
         # If a regularization matrix (prior covariance matrix) has been provided
         # convert G -> GtG and d -> Gtd (Gram products)
         if self.regMat is not None:
-            d = np.dot(G.T, d)
-            G = np.dot(G.T, G) + self.regMat
+            df = np.dot(Gf.T, df)
+            Gf = np.dot(Gf.T, Gf) + self.regMat
 
         # Convert Numpy arrays to CVXOPT matrices
-        A = matrix(G.T.tolist())
-        b = matrix(d.tolist())
+        A = matrix(Gf.T.tolist())
+        b = matrix(df.tolist())
         m, n = A.size
         reg_indices_n = (self.reg_indices + n).tolist()
 
@@ -315,7 +378,7 @@ class LassoRegression(LinearRegression):
         else:
             Cm = np.eye(n)
 
-        return x, Cm
+        return SUCCESS, x, Cm
 
 
     def logWeighting(self, x):
@@ -409,7 +472,8 @@ class LassoRegression(LinearRegression):
 class OrthogonalMatchingPursuit(LinearRegression):
 
 
-    def __init__(self, n_nonzero_coefs=10, regMat=None): 
+    def __init__(self, n_nonzero_coefs=10, regMat=None, **kwargs): 
+        super().__init__(**kwargs)
         # Cache some properties
         self.n_nonzero_coefs = n_nonzero_coefs
         self.regMat = regMat 
@@ -430,26 +494,35 @@ class OrthogonalMatchingPursuit(LinearRegression):
 
         Returns
         -------
+        status: int
+            Integer flag for failure or success.
         m: (N,) np.ndarray
             Output parameter vector.
         m_wgt: (N,) np.ndarray, optional
             Weights for parameters.
         """
+        # Indices for finite data
+        mask = np.isfinite(d).nonzero()[0]
+        if mask.size < self.n_min:
+            warnings.warn('Not enough data for inversion. Returning None.')
+            return FAIL, None, None
+        Gf, df, wgt = self.apply_mask(mask, G, d, wgt=wgt)
+
         # If weight array provided, pre-multiply design matrix and data
         if wgt is not None:
-            G = dmultl(wgt, G)
-            d = wgt * d
+            Gf = dmultl(wgt, Gf)
+            df = wgt * df
 
         # Compute Gram matrix (X.T*X) and product (X.T*y)
         if self.regMat is not None:
-            XtX = np.dot(G.T, G) + self.regMat
+            XtX = np.dot(Gf.T, Gf) + self.regMat
         else:
-            XtX = np.dot(G.T, G)
-        Xty = np.dot(G.T, d)
+            XtX = np.dot(Gf.T, Gf)
+        Xty = np.dot(Gf.T, df)
 
         # Solve
         m = orthogonal_mp_gram(XtX, Xty, n_nonzero_coefs=self.n_nonzero_coefs, copy_Xy=False)
-        return m, np.eye(len(m))
+        return SUCCESS, m, np.eye(len(m))
 
 
 # end of file
