@@ -2,8 +2,10 @@
 
 import numpy as np
 from scipy.ndimage.interpolation import map_coordinates
+import pyproj
 import h5py
 import gdal
+import osr
 import sys
 
 # Map from GDAL data type to numpy
@@ -110,6 +112,8 @@ class Raster:
         ds = driver.Create(filename, xsize=self.hdr.nx, ysize=self.hdr.ny, bands=1, eType=dtype)
 
         # Create geotransform and projection
+        if epsg is None and self.hdr._epsg is not None:
+            epsg = self.hdr._epsg
         if epsg is not None:
             from osgeo import osr
             ds.SetGeoTransform(self.hdr.geotransform)
@@ -192,6 +196,60 @@ class Raster:
         i, j = coord
         return self.data[i,j]
 
+    def __add__(self, other):
+        """
+        Addition between two rasters.
+        """
+        # Check RasterInfo consistency
+        assert self.hdr == other.hdr, 'RasterInfo objects not equal.'
+        # Perform addition and return a new Raster
+        data = self.data + other.data
+        return Raster(data=data, hdr=self.hdr)
+
+    def __sub__(self, other):
+        """
+        Subtraction between two rasters.
+        """
+        # Check RasterInfo consistency
+        assert self.hdr == other.hdr, 'RasterInfo objects not equal.'
+        # Perform subtraction and return a new Raster
+        data = self.data - other.data
+        return Raster(data=data, hdr=self.hdr)
+
+    def __mul__(self, other):
+        """
+        Multiplication between two rasters.
+        """
+        # Check RasterInfo consistency
+        assert self.hdr == other.hdr, 'RasterInfo objects not equal.'
+        # Perform multiplication and return a new Raster
+        data = self.data * other.data
+        return Raster(data=data, hdr=self.hdr)
+
+    def __truediv__(self, other):
+        """
+        Floating point division between two rasters.
+        """
+        # Check RasterInfo consistency
+        assert self.hdr == other.hdr, 'RasterInfo objects not equal.'
+        # Perform division and return a new Raster
+        data = self.data / other.data
+        return Raster(data=data, hdr=self.hdr)
+
+    def __pow__(self, exponent):
+        """
+        Raise Raster data to a power.
+        """
+        # Raise to power and return a new Raster
+        data = self.data**exponent
+        return Raster(data=data, hdr=self.hdr)
+
+    def sqrt(self):
+        """
+        Return square root of data. Used for NumPy compatibility.
+        """
+        return np.sqrt(self.data)
+
 
 class RasterInfo:
     """
@@ -199,7 +257,7 @@ class RasterInfo:
     """
 
     def __init__(self, rasterfile=None, stackfile=None, X=None, Y=None,
-                 band=1, islice=None, jslice=None):
+                 band=1, epsg=None, islice=None, jslice=None):
         """
         Initialize attributes.
         """
@@ -208,9 +266,10 @@ class RasterInfo:
         elif stackfile is not None:
             self.load_stack_info(stackfile, islice=islice, jslice=jslice)
         elif X is not None and Y is not None:
-            self.set_from_meshgrid(X, Y)
+            self.set_from_meshgrid(X, Y, epsg=epsg)
         else:
             self.xstart = self.dx = self.ystart = self.dy = self.ny = self.nx = None
+            self._epsg = None
 
     def load_gdal_info(self, rasterfile, islice=None, jslice=None, band=1):
         """
@@ -229,6 +288,11 @@ class RasterInfo:
         except AttributeError:
             self.ystart = self.xstart = 0.0
             self.dx = self.dy = 1.0
+
+        # Extract projection information as an EPSG code
+        proj = osr.SpatialReference(wkt=dset.GetProjection())
+        proj.AutoIdentifyEPSG()
+        self._epsg = int(proj.GetAttrValue('AUTHORITY', 1))
             
         # Incorporate row slicing
         if islice is not None:
@@ -279,10 +343,16 @@ class RasterInfo:
             self.dy = Y[1] - Y[0]
             self.ny, self.nx = Y.size, X.size
 
+            # Try to read EPSG code
+            try:
+                self._epsg = fid.attrs['EPSG']
+            except KeyError:
+                self._epsg = None
+
             # Set units
             self.units = 'm'
 
-    def set_from_meshgrid(self, X, Y, units='m'):
+    def set_from_meshgrid(self, X, Y, epsg=None, units='m'):
         """
         Set header information from meshgrid array.s
         """
@@ -291,6 +361,7 @@ class RasterInfo:
         self.dx = X[0,1] - X[0,0]
         self.dy = Y[1,0] - Y[0,0]
         self.ny, self.nx = X.shape
+        self._epsg = epsg
         self.units = units
 
     def crop(self, xmin, xmax, ymin, ymax):
@@ -375,6 +446,16 @@ class RasterInfo:
         Return GDAL-compatible geo transform array.
         """
         return [self.xstart, self.dx, 0.0, self.ystart, 0.0, self.dy]
+
+    @property
+    def epsg(self):
+        """
+        Return read-only EPSG code.
+        """
+        return self._epsg
+    @epsg.setter
+    def epsg(self, value):
+        raise NotImplementedError('Cannot set EPSG value explicitly.')
 
     @property
     def extent(self):
@@ -506,7 +587,81 @@ def interpolate_array(array, hdr, x, y, ref_hdr=None, order=3):
                              mode='constant', cval=np.nan)
 
     # Recover original shape and return
-    return values.reshape(x.shape)    
+    return values.reshape(x.shape) 
+
+def warp(raster, target_epsg=None, target_hdr=None, target_dims=None, order=3, n_proc=1):
+    """
+    Warp raster to another RasterInfo hdr object with a different projection system.
+    Currently only supports EPSG projection representations.
+    """
+    # Check source RasterInfo has EPSG value set
+    assert raster.hdr.epsg is not None, 'No EPSG information found for source raster.'
+
+    # Create projection objects
+    src_proj = pyproj.Proj('EPSG:%d' % raster.hdr.epsg)
+    if target_epsg is None and target_hdr is not None:
+        assert target_hdr.epsg is not None, 'No EPSG information found for target raster.'
+        trg_proj = pyproj.Proj('EPSG:%d' % target_hdr.epsg)
+    elif target_epsg is not None:
+        trg_proj = pyproj.Proj('EPSG:%d' % target_epsg)
+    else:
+        raise ValueError('Must supply EPSG or RasterInfo to specify target projection.')
+
+    # If only EPSG code is provided, compute target grid
+    if target_hdr is None:
+    
+        # Convert bounding coordinates from source to target projection
+        src_xmin, src_xmax = raster.hdr.xlim
+        src_ymin, src_ymax = raster.hdr.ylim
+        x0, y0 = pyproj.transform(src_proj, trg_proj, src_xmin, src_ymax, always_xy=True)
+        x1, y1 = pyproj.transform(src_proj, trg_proj, src_xmax, src_ymax, always_xy=True)
+        x2, y2 = pyproj.transform(src_proj, trg_proj, src_xmax, src_ymin, always_xy=True)
+        x3, y3 = pyproj.transform(src_proj, trg_proj, src_xmin, src_ymin, always_xy=True)
+        xvals = np.array([x0, x1, x2, x3])
+        yvals = np.array([y0, y1, y2, y3])
+        trg_xmin, trg_xmax = np.min(xvals), np.max(xvals)
+        trg_ymin, trg_ymax = np.min(yvals), np.max(yvals)
+
+        # Get target dimensions from user input or source raster
+        if target_dims is not None:
+            out_ny, out_nx = target_dims
+        else:
+            out_ny, out_nx = raster.hdr.ny, raster.hdr.nx
+        
+        # Construct meshgrid with same dimensions (may be a bad idea in polar regions)
+        xarr = np.linspace(trg_xmin, trg_xmax, out_nx)
+        yarr = np.linspace(trg_ymax, trg_ymin, out_ny)
+        trg_x, trg_y = np.meshgrid(xarr, yarr)
+
+        # Create a RasterInfo object for target
+        target_hdr = RasterInfo(X=trg_x, Y=trg_y, epsg=target_epsg)
+
+    # Otherwise, get meshgrid straight from target_hdr
+    else:
+        trg_x, trg_y = target_hdr.meshgrid()
+
+    # Perform transformation on chunks in parallel
+    import pymp
+    data_warped = pymp.shared.array(trg_y.shape, dtype=raster.data.dtype)
+    chunks = get_chunks(trg_x.shape, 128, 128)
+    n_chunks = len(chunks)
+
+    # Loop over chunks
+    with pymp.Parallel(n_proc) as manager:
+        for k in manager.range(n_chunks):
+
+            # Convert target coordinates to source coordinates
+            islice, jslice = chunks[k]
+            src_x, src_y = pyproj.transform(trg_proj, src_proj,
+                                            trg_x[islice, jslice],
+                                            trg_y[islice, jslice],
+                                            always_xy=True)
+
+            # Interpolate source raster
+            data_warped[islice, jslice] = interpolate_raster(raster, src_x, src_y, order=order)
+
+    # Return new raster
+    return Raster(data=data_warped, hdr=target_hdr)
 
 def write_array_as_raster(array, hdr, filename, epsg=None, dtype=None):
     """
@@ -522,5 +677,108 @@ def write_array_as_raster(array, hdr, filename, epsg=None, dtype=None):
         dtype = numpy_to_gdal_type[dtype.str]
     # Write
     raster.write_gdal(filename, epsg=epsg, dtype=dtype)
+
+def render_kml(raster, filename, dpi=300, cmap='viridis', clim=None, n_proc=1):
+    """
+    Renders Raster data to an image and creates a KML for viewing in Google Earth.
+
+    Parameters
+    ----------
+    raster: Raster
+        Raster to render to KML.
+    filename: str
+        Name of output KML file.
+    dpi: int
+        DPI of saved PNG file. Default: 300.
+    cmap: {str, matplotlib.colors.ListedColormap}, optional
+        Colormap for plotting data. Default: 'viridis'.
+    clim: {tuple, None}, optional
+        Color limit for plotting data. Default: None.
+    n_proc: int, optional
+        Number of processors for warping raster if not in EPSG:4326. Default: 1.
+
+    Returns
+    -------
+    None
+    """
+    import matplotlib.pyplot as plt
+    import simplekml
+
+    # First warp raster if not provided in EPSG:4326 projection
+    if raster.hdr.epsg != 4326:
+        print('warping')
+        raster = warp(raster, target_epsg=4326, order=1, n_proc=n_proc)
+
+    # Make an image
+    fig, ax = plt.subplots(figsize=(11,7))
+    im = ax.imshow(raster.data, cmap=cmap, clim=clim)
+    ax.axis('off')
+    
+    # Save to PNG
+    froot = filename.split('.')[0]
+    pngfile = froot + '.png'
+    fig.savefig(pngfile, dpi=dpi, bbox_inches='tight', pad_inches=0.0, transparent=True)
+
+    # Get coordinate bounds
+    west, east, south, north = raster.hdr.extent
+
+    # Make KML
+    kml = simplekml.Kml()
+    ground = kml.newgroundoverlay(name='GroundOverlay')
+    ground.icon.href = pngfile
+    ground.latlonbox.north = north
+    ground.latlonbox.south = south
+    ground.latlonbox.east = east
+    ground.latlonbox.west = west
+    kml.save(filename)
+
+    return
+
+def get_chunks(dims, chunk_y, chunk_x):
+    """
+    Utility function to get chunk bounds.
+
+    Parameters
+    ----------
+    dims: tuples for dimensions
+        (Ny, Nx) dimensions.
+    chunk_y: int
+        Size of chunk in vertical dimension.
+    chunk_x: int
+        Size of chunk in horizontal dimension.
+
+    Returns
+    -------
+    chunks: list
+        List of all chunks in the image.
+    """
+    # First determine the number of chunks in each dimension
+    Ny, Nx = dims
+    Ny_chunk = int(Ny // chunk_y)
+    Nx_chunk = int(Nx // chunk_x)
+    if Ny % chunk_y != 0:
+        Ny_chunk += 1
+    if Nx % chunk_x != 0:
+        Nx_chunk += 1
+
+    # Now construct chunk bounds
+    chunks = []
+    for i in range(Ny_chunk):
+        if i == Ny_chunk - 1:
+            nrows = Ny - chunk_y * i
+        else:
+            nrows = chunk_y
+        istart = chunk_y * i
+        iend = istart + nrows
+        for j in range(Nx_chunk):
+            if j == Nx_chunk - 1:
+                ncols = Nx - chunk_x * j
+            else:
+                ncols = chunk_x
+            jstart = chunk_x * j
+            jend = jstart + ncols
+            chunks.append([slice(istart,iend), slice(jstart,jend)])
+
+    return chunks
 
 # end of file

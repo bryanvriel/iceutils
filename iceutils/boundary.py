@@ -3,6 +3,7 @@
 import numpy as np
 from scipy.interpolate import UnivariateSpline
 from matplotlib.path import Path
+import pyproj
 import sys
 
 class Boundary:
@@ -137,18 +138,18 @@ def load_termini_gmt(files, name='Jakobshavn'):
     # Done
     return termini
 
-def load_kml(kmlfile):
+def load_kml(kmlfile, out_epsg=4326):
     """
     Convenience function to parse a KML file to get the coordinates.
     """
-    from pykml import parser
+    import xml.etree.ElementTree as ET
 
     # Parse the file
-    with open(kmlfile, 'r') as fid:
-        doc = parser.parse(fid)
+    tree = ET.parse(kmlfile)
+    root = tree.getroot()
 
-    # Iterate
-    for child in doc.iter():
+    # Iterate over main KML document
+    for child in root.iter():
         tag = child.tag.split('}')[-1]
         if tag == 'coordinates':
 
@@ -165,6 +166,43 @@ def load_kml(kmlfile):
                 lon[i] = x
                 lat[i] = y
 
-    return lon, lat
+    # Perform transformation if another EPSG is specified
+    if out_epsg != 4326:
+        proj = pyproj.Proj('EPSG:%d' % out_epsg)
+        wgs84 = pyproj.Proj('EPSG:4326')
+        x, y = pyproj.transform(wgs84, proj, lon, lat, always_xy=True)
+        return x, y
+    else:
+        return lon, lat
+
+def transform_coordinates(x_in, y_in, epsg_in, epsg_out):
+    """
+    Transforms coordinates from one projection to another specified by EPSG codes.
+
+    Parameters
+    ----------
+    x_in: ndarray
+        Input X-coordinates.
+    y_in: ndarray
+        Input Y-coordinates.
+    epsg_in: int
+        Input EPSG projection.
+    epsg_out: int
+        Output EPSG projection.
+
+    Returns
+    -------
+    x_out: ndarray
+        Output X-coordinates.
+    y_out: ndarray
+        Output Y-coordinates.
+    """
+    # Create projection objects
+    proj_in = pyproj.Proj('EPSG:%d' % epsg_in)
+    proj_out = pyproj.Proj('EPSG:%d' % epsg_out)
+
+    # Perform transformation
+    return pyproj.transform(proj_in, proj_out, x_in, y_in, always_xy=True)
+
 
 # end of file    
