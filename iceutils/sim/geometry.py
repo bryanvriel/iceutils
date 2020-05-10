@@ -148,7 +148,7 @@ class Profile:
                      bounds_error=bounds_error)(x),
         )
 
-    def update_terminus(self, pad=5, verbose=False):
+    def update_terminus(self, pad=5, threshold=0.0, verbose=False):
         """
         Updates terminus position to satisfy flotation criterion.
 
@@ -169,7 +169,7 @@ class Profile:
         f = self.flotation_criterion()
 
         # Check for retreat
-        if f[-1] < 0.0:
+        if f[-1] < threshold:
             new_profile = retreat_terminus(self, verbose=verbose)
         
         # Check for advance
