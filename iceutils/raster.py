@@ -10,7 +10,7 @@ import sys
 
 # Map from GDAL data type to numpy
 gdal_type_to_numpy = {
-    gdal.GDT_Byte: np.byte,
+    gdal.GDT_Byte: np.uint8,
     gdal.GDT_Int16: np.int16,
     gdal.GDT_Int32: np.int32,
     gdal.GDT_UInt16: np.uint16,
