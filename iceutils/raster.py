@@ -3,6 +3,7 @@
 import numpy as np
 from scipy.ndimage.interpolation import map_coordinates
 import pyproj
+import struct
 import h5py
 import gdal
 import osr
@@ -19,6 +20,19 @@ gdal_type_to_numpy = {
     gdal.GDT_Float64: np.float64,
     gdal.GDT_CFloat32: np.complex64,
     gdal.GDT_CFloat64: np.complex128
+}
+
+# Map from GDAL data type to Python format string
+gdal_type_to_str = {
+    gdal.GDT_Byte: 'B',
+    gdal.GDT_Int16: 'h',
+    gdal.GDT_Int32: 'i',
+    gdal.GDT_UInt16: 'H',
+    gdal.GDT_UInt32: 'I',
+    gdal.GDT_Float32: 'f',
+    gdal.GDT_Float64: 'd',
+    gdal.GDT_CFloat32: 'ff',
+    gdal.GDT_CFloat64: 'dd'
 }
 
 # Map from numpy dtype to GDAL data type
@@ -44,7 +58,8 @@ class Raster:
                  data=None, hdr=None,
                  rasterfile=None, band=1,
                  stackfile=None, h5path=None,
-                 islice=None, jslice=None):
+                 islice=None, jslice=None,
+                 projWin=None):
 
         # If data and header are provided, save them and return
         if data is not None and hdr is not None:
@@ -61,8 +76,10 @@ class Raster:
                 rasterfile = filename
 
         # Load the header info
-        self.hdr = RasterInfo(rasterfile=rasterfile, stackfile=stackfile,
-                              islice=islice, jslice=jslice)
+        self.hdr = RasterInfo(rasterfile=rasterfile, stackfile=stackfile)
+
+        # Load subset/slicing information
+        islice, jslice = self.hdr.subset_region(projWin=projWin, islice=islice, jslice=jslice)
 
         # Load the raster data
         if rasterfile is not None:
@@ -80,12 +97,43 @@ class Raster:
         """
         Load GDAL raster data.
         """
+        # Open dataset
         dset = gdal.Open(filename, gdal.GA_ReadOnly)
-        d = dset.GetRasterBand(band).ReadAsArray()
-        if islice is not None:
-            d = d[islice,:]
-        if jslice is not None:
-            d = d[:,jslice]
+
+        # Get band
+        b = dset.GetRasterBand(band)
+
+        # Read whole dataset
+        if islice is None and jslice is None:
+            d = b.ReadAsArray()
+
+        # Or subset using gdal raster functionality
+        else:
+    
+            # Unpack the slice bounds
+            y0, y1 = int(islice.start), int(islice.stop)
+            x0, x1 = int(jslice.start), int(jslice.stop)
+            # Compute buffer size
+            xsize = x1 - x0
+            ysize = y1 - y0
+
+            # Read raster portion
+            scanline = b.ReadRaster(xoff=x0, yoff=y0, xsize=xsize, ysize=ysize,
+                                    buf_xsize=xsize, buf_ysize=ysize, buf_type=b.DataType)
+
+            # Convert to Python values
+            fmt = gdal_type_to_str[b.DataType]
+            values = struct.unpack(fmt * (xsize * ysize), scanline)
+
+            # Convert to NumPy array
+            d = np.array(values, dtype=fmt[0])
+            # Handle complex values separately
+            if fmt in ('ff', 'dd'):
+                d = arr[0::2] + 1j * arr[1::2]
+            # Reshape
+            d = d.reshape(ysize, xsize)
+        
+        # Return array                    
         return d
 
     @staticmethod
@@ -271,7 +319,7 @@ class RasterInfo:
             self.xstart = self.dx = self.ystart = self.dy = self.ny = self.nx = None
             self._epsg = None
 
-    def load_gdal_info(self, rasterfile, islice=None, jslice=None, band=1):
+    def load_gdal_info(self, rasterfile, projWin=None, islice=None, jslice=None, band=1):
         """
         Read raster and geotransform information from GDAL dataset.
         """
@@ -293,17 +341,11 @@ class RasterInfo:
         proj = osr.SpatialReference(wkt=dset.GetProjection())
         proj.AutoIdentifyEPSG()
         self._epsg = int(proj.GetAttrValue('AUTHORITY', 1))
-            
-        # Incorporate row slicing
-        if islice is not None:
-            self.ystart += islice.start * self.dy
-            self.ny = islice.stop - islice.start
-        # Incorporate column slicing
-        if jslice is not None:
-            self.xstart += jslice.start * self.dx
-            self.nx = jslice.stop - jslice.start
 
-        # Set units
+        # Optional subset
+        self.subset_region(projWin=projWin, islice=islice, jslice=jslice)
+        
+        # Set units (not yet used)
         self.units = 'm'
 
         # Get data type from band
@@ -351,6 +393,35 @@ class RasterInfo:
 
             # Set units
             self.units = 'm'
+
+    def subset_region(self, projWin=None, islice=None, jslice=None):
+        """
+        Subset the geographic metadata either by a projection window or image
+        row and column slices.
+        """
+        # Convert any projection window into image coordinates
+        if projWin is not None and islice is None and jslice is None:
+
+            # Convert coordinates
+            i0, j0 = self.xy_to_imagecoord(projWin[0], projWin[1])
+            i1, j1 = self.xy_to_imagecoord(projWin[2], projWin[3])
+
+            # Construct slices
+            islice = slice(i0, i1)
+            jslice = slice(j0, j1)
+
+        # Apply row slicing
+        if islice is not None:
+            self.ystart += islice.start * self.dy
+            self.ny = islice.stop - islice.start
+
+        # Apply column slicing
+        if jslice is not None:
+            self.xstart += jslice.start * self.dx
+            self.nx = jslice.stop - jslice.start
+
+        # Return slices
+        return islice, jslice
 
     def set_from_meshgrid(self, X, Y, epsg=None, units='m'):
         """
