@@ -3,11 +3,12 @@
 import numpy as np
 from scipy.ndimage.interpolation import map_coordinates
 import pyproj
-import struct
 import h5py
 import gdal
 import osr
 import sys
+
+from .boundary import transform_coordinates
 
 # Map from GDAL data type to numpy
 gdal_type_to_numpy = {
@@ -65,6 +66,7 @@ class Raster:
         if data is not None and hdr is not None:
             self.data = data
             self.hdr = hdr
+            self.filename = None
             return
 
         # Attempt to guess format of generic filename if provided
@@ -89,6 +91,13 @@ class Raster:
             self.data = self.load_hdf5(stackfile, h5path, islice=islice, jslice=jslice)
         else:
             raise ValueError('Must provide GDAL raster of HDF5 stack.')
+
+        # Cache the slices for provenance
+        self.islice = islice
+        self.jslice = jslice
+
+        # Cache raster filename
+        self.rasterfile = rasterfile
 
         return
 
@@ -121,16 +130,15 @@ class Raster:
             scanline = b.ReadRaster(xoff=x0, yoff=y0, xsize=xsize, ysize=ysize,
                                     buf_xsize=xsize, buf_ysize=ysize, buf_type=b.DataType)
 
-            # Convert to Python values
-            fmt = gdal_type_to_str[b.DataType]
-            values = struct.unpack(fmt * (xsize * ysize), scanline)
-
             # Convert to NumPy array
-            d = np.array(values, dtype=fmt[0])
-            # Handle complex values separately
+            fmt = gdal_type_to_str[b.DataType]
+            d = np.frombuffer(scanline, dtype=fmt[0])
+
+            # Special handling for complex values
             if fmt in ('ff', 'dd'):
-                d = arr[0::2] + 1j * arr[1::2]
-            # Reshape
+                d = d[0::2] + 1j * d[1::2]
+
+            # Reshape to 2D array
             d = d.reshape(ysize, xsize)
         
         # Return array                    
@@ -236,7 +244,7 @@ class Raster:
             return x, y, z
         else:
             return z
-
+     
     def __getitem__(self, coord):
         """
         Access data at given coordinates.
@@ -311,6 +319,7 @@ class RasterInfo:
         """
         if rasterfile is not None:
             self.load_gdal_info(rasterfile, islice=islice, jslice=jslice, band=band)
+            self.rasterfile = rasterfile
         elif stackfile is not None:
             self.load_stack_info(stackfile, islice=islice, jslice=jslice)
         elif X is not None and Y is not None:
@@ -337,11 +346,12 @@ class RasterInfo:
             self.ystart = self.xstart = 0.0
             self.dx = self.dy = 1.0
 
-        # Extract projection information as an EPSG code
-        proj = osr.SpatialReference(wkt=dset.GetProjection())
-        proj.AutoIdentifyEPSG()
-        self._epsg = int(proj.GetAttrValue('AUTHORITY', 1))
-
+        # Attempt to extract projection information as an EPSG code
+        try:
+            self._epsg = wkt_to_epsg(dset.GetProjection())
+        except TypeError:
+            pass
+        
         # Optional subset
         self.subset_region(projWin=projWin, islice=islice, jslice=jslice)
         
@@ -457,6 +467,59 @@ class RasterInfo:
         self.ny = len(y)
 
         return xmask, ymask
+
+    def read_GCPs(self, rasterfile=None, gcp_epsg=None, epsg_out=None, s=5):
+        """
+        Load ground control points (GCPs) from gdal Dataset. Then, construct 2D
+        interpolating splines that represent mapping from image to georeferenced
+        coordinates with mapping determined from GCPs.
+
+        Parameters
+        ----------
+        rasterfile: str, optional
+            GDAL raster file to read GCPs from. Use cached source raster by default.
+        gcp_epsg: int, optional
+            Override EPSG code for GCP coordinates. Default determined from GCP projection.
+        epsg_out: int, optional
+            EPSG code for output X-Y coordinates. It not provided, use GCP EPSG.
+        s: float, optional
+            Smoothing factor for splines. See docs for SmoothBivariateSpline. Default: 5.
+
+        Returns
+        -------
+        None
+        """
+        from scipy.interpolate import SmoothBivariateSpline
+
+        # Specify filename
+        if rasterfile is None:
+            rasterfile = self.rasterfile
+        assert rasterfile is not None, 'No valid raster file specified.'
+
+        # Read GCP info
+        ds = gdal.Open(rasterfile, gdal.GA_ReadOnly)
+        gcp_proj = ds.GetGCPProjection()
+        gcp_epsg = wkt_to_epsg(gcp_proj)
+        GCPs = ds.GetGCPs()
+        ds = None
+
+        # Unpack GCP information
+        N_gcp = len(GCPs)
+        pixel = np.zeros(N_gcp)
+        line = np.zeros(N_gcp)
+        x = np.zeros(N_gcp)
+        y = np.zeros(N_gcp)
+        for i, gcp in enumerate(GCPs):
+            pixel[i], line[i], x[i], y[i] = gcp.GCPPixel, gcp.GCPLine, gcp.GCPX, gcp.GCPY
+        
+        # Convert GCP coordinates to another projection if needed
+        if epsg_out != gcp_epsg:
+            x, y = transform_coordinates(x, y, gcp_epsg, epsg_out)
+
+        # Build splines
+        self._gcp_spline_row = SmoothBivariateSpline(x, y, line, s=s)
+        self._gcp_spline_col = SmoothBivariateSpline(x, y, pixel, s=s)
+        self._gcp_epsg = epsg_out
 
     def __eq__(self, other):
         """
@@ -584,6 +647,23 @@ class RasterInfo:
         y = self.ystart + row * self.dy
         x = self.xstart + col * self.dx
         return x, y
+
+    def xy_to_imagecoord_gcp(self, x, y):
+        """
+        Converts geographic XY point to row and column coordinate using 2D splines
+        formed from ground control points (GCPs). Must have called
+        RasterInfo.read_GCPs first.
+        """
+        # Check for existence of GCP splines
+        if not hasattr(self, '_gcp_spline_row') or not hasattr(self, '_gcp_spline_col'):
+            raise ValueError('Must run RasterInfo.read_GCPs first.')
+
+        # Evaluate splines
+        col = self._gcp_spline_col(x, y, grid=False)
+        row = self._gcp_spline_row(x, y, grid=False)
+
+        # Return
+        return row, col
 
 
 def load_ann(filename, comment=';'):
@@ -734,6 +814,55 @@ def warp(raster, target_epsg=None, target_hdr=None, target_dims=None, order=3, n
     # Return new raster
     return Raster(data=data_warped, hdr=target_hdr)
 
+def warp_with_gcp_splines(raster, gcp_hdr, x=None, y=None, out_hdr=None, order=3):
+    """
+    Warp a raster to output grid using pre-constructed 2D interpolation splines
+    formed from GCPs. Must call Raster.read_GCPs first.
+
+    Parameters
+    ----------
+    raster: Raster
+        Input raster to warp.
+    gcp_hdr: RasterInfo
+        Input RasterInfo object with GCP spline attributes.
+    x: ndarry, optional
+        X-coordinates for output grid.
+    y: ndarray, optional
+        Y-coordinates for output grid.
+    out_hdr: RasterInfo, optional
+        RasterInfo for specifying output coordinates if not otherwise specified.
+    order: int, optional
+        Order of interpolation scheme. Default: 3.
+
+    Returns
+    -------
+    out_raster: Raster
+        Output warped raster object.
+    """
+    # Get output coordinates from ref_hdr if not specified
+    if x is None and y is None and out_hdr is not None:
+        assert out_hdr.epsg == gcp_hdr._gcp_epsg, 'EPSG mismatch with GCP splines.'
+        x, y = out_hdr.meshgrid()
+    else:
+        out_hdr = RasterInfo(X=x, Y=y, epsg=gcp_hdr._gcp_epsg)
+
+    # Evalute splines to get image coordinates for output grid
+    grid_row, grid_col = gcp_hdr.xy_to_imagecoord_gcp(x.ravel(), y.ravel())
+
+    # Adjust image coordinates for any offsets from subsetting
+    if raster.islice is not None:
+        grid_row -= raster.islice.start
+    if raster.jslice is not None:
+        grid_col -= raster.jslice.start
+
+    # Interpolate
+    points = np.vstack((grid_row, grid_col))
+    out = map_coordinates(raster.data, points, prefilter=False, mode='constant', cval=np.nan,
+                          order=order)
+
+    # Create new Raster
+    return Raster(data=out.reshape(x.shape), hdr=out_hdr)
+
 def write_array_as_raster(array, hdr, filename, epsg=None, dtype=None):
     """
     Convenience function to write a NumPy array to a raster file with a given RasterInfo.
@@ -804,6 +933,16 @@ def render_kml(raster, filename, dpi=300, cmap='viridis', clim=None, n_proc=1):
     kml.save(filename)
 
     return
+
+def wkt_to_epsg(wkt):
+    """
+    Convenience function to convert a projection formatted as a WKT (Well Known Transformation)
+    to an EPSG code.
+    """
+    proj = osr.SpatialReference(wkt=wkt)
+    proj.AutoIdentifyEPSG()
+    epsg = int(proj.GetAttrValue('AUTHORITY', 1))
+    return epsg
 
 def get_chunks(dims, chunk_y, chunk_x):
     """
