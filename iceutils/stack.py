@@ -13,8 +13,9 @@ class Stack:
     Class that encapsulates standard HDF5 stack file.
     """
 
-    def __init__(self, filename, mode='r', init_stack=None, init_tdec=None,
-                 init_rasterinfo=None):
+    def __init__(self, filename, mode='r',
+                 init_stack=None, init_tdec=None, init_rasterinfo=None,
+                 init_data=False):
 
         self.fid = None
         self._datasets = {}
@@ -58,6 +59,10 @@ class Stack:
 
         # Initialize a NaN time series
         self._nan_tseries = np.full(self.tdec.shape, np.nan, dtype='f')
+
+        # Optionally create default "data" dataset
+        if init_data:
+            self.init_default_datasets()
 
         return
 
