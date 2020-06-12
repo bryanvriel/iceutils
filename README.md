@@ -26,7 +26,11 @@ pip install pymp-pypi
 pip install pint
 ```
 
-To install `iceutils`, first, clone the repository:
+To install `iceutils`, you may clone a read-only version of the repository:
+```
+git clone https://github.com/bryanvriel/iceutils.git
+```
+Or, if you are developer, you may clone with SSH:
 ```
 git clone git@github.com:bryanvriel/iceutils.git
 ```
