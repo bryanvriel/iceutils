@@ -175,7 +175,7 @@ def load_kml(kmlfile, out_epsg=4326):
     else:
         return lon, lat
 
-def transform_coordinates(x_in, y_in, epsg_in, epsg_out):
+def transform_coordinates(x_in, y_in, epsg_in=None, epsg_out=None, proj_in=None, proj_out=None):
     """
     Transforms coordinates from one projection to another specified by EPSG codes.
 
@@ -185,10 +185,14 @@ def transform_coordinates(x_in, y_in, epsg_in, epsg_out):
         Input X-coordinates.
     y_in: ndarray
         Input Y-coordinates.
-    epsg_in: int
+    epsg_in: int, optional
         Input EPSG projection.
-    epsg_out: int
+    epsg_out: int, optional
         Output EPSG projection.
+    proj_in: pyproj.Proj, optional
+        Input Proj object.
+    proj_out: pyproj.Proj, optional
+        Output Proj object.
 
     Returns
     -------
@@ -198,8 +202,10 @@ def transform_coordinates(x_in, y_in, epsg_in, epsg_out):
         Output Y-coordinates.
     """
     # Create projection objects
-    proj_in = pyproj.Proj('EPSG:%d' % epsg_in)
-    proj_out = pyproj.Proj('EPSG:%d' % epsg_out)
+    if proj_in is None or proj_out is None:
+        assert epsg_in is not None and epsg_out is not None, 'Must specify EPSG codes.'
+        proj_in = pyproj.Proj('EPSG:%d' % epsg_in)
+        proj_out = pyproj.Proj('EPSG:%d' % epsg_out)
 
     # Perform transformation
     return pyproj.transform(proj_in, proj_out, x_in, y_in, always_xy=True)

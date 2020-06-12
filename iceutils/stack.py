@@ -13,75 +13,71 @@ class Stack:
     Class that encapsulates standard HDF5 stack file.
     """
 
-    def __init__(self, filename, mode='r', init=None):
+    def __init__(self, filename, mode='r',
+                 init_stack=None, init_tdec=None, init_rasterinfo=None,
+                 init_data=False):
 
         self.fid = None
+        self._datasets = {}
 
         # Store the mode
         assert mode in ('r', 'r+', 'w', 'a'), 'Unsupported HDF5 file open mode'
         self.mode = mode
 
-        # Save RasterInfo if file opened in read mode
-        if self.mode in ('r', 'r+', 'a'):
-            self.hdr = RasterInfo(stackfile=filename)
-
         # Open HDF5 file 
         self.fid = h5py.File(filename, self.mode)
 
-        # Read time information
-        if self.mode in ('r', 'r+', 'a'):
+        # If file opened in read mode, save RasterInfo and time information
+        if self.mode in ('r', 'r+'):
+            self.hdr = RasterInfo(stackfile=filename)
             self.tdec = self.fid['tdec'][()]
 
-        # If another stack is provided, copy metadata and save into Datasets
-        if isinstance(init, Stack):
-            self.hdr = init.hdr
-            self.tdec = init.tdec
-            if self.mode in ('r+', 'w', 'a'):
-                self.fid['x'] = self.hdr.xcoords
-                self.fid['y'] = self.hdr.ycoords
-                self.fid['tdec'] = self.tdec
-
-        # Initialize datasets dictionary
-        self._datasets = {}
-        if self.mode in ('r', 'r+', 'a'):
+            # Initialize datasets dictionary
             for key in self.fid.keys():
                 self._datasets[key] = self.fid[key]
 
+        # Otherwise, initialize from another stack or from separate time and RasterInfo
+        else:
+
+            # If another stack is provided, copy metadata and save into Datasets
+            if isinstance(init_stack, Stack):
+                self.hdr = init_stack.hdr
+                self.tdec = init_stack.tdec
+
+            # Otherwise, set from time array and RasterInfo
+            elif init_tdec is not None and init_rasterinfo is not None:
+                self.hdr = init_rasterinfo
+                self.tdec = init_tdec
+
+            else:
+                raise ValueError('Must supply init_stack or init_tdec+init_rasterinfo.')
+
+            # Set metadata datasets
+            self.fid['x'] = self.hdr.xcoords
+            self.fid['y'] = self.hdr.ycoords
+            self.fid['tdec'] = self.tdec
+
+        # Initialize a NaN time series
+        self._nan_tseries = np.full(self.tdec.shape, np.nan, dtype='f')
+
+        # Optionally create default "data" dataset
+        if init_data:
+            self.init_default_datasets()
+
         return
 
-
-    def initialize(self, tdec, raster_info, data=True, weights=False, chunks=(1, 128, 128)):
+    def init_default_datasets(self, weights=False, chunks=(1, 128, 128)):
         """
-        For a stack in write mode, initialize metadata Datasets.
+        Initialize default datasets 'data' and (optionally) 'weights'.
         """
-        # The time array
-        self.tdec = tdec
-        self.create_dataset('tdec', tdec.shape, dtype='d', data=tdec)
-
-        # Spatial information
-        self.hdr = raster_info
-        self.set_spatial_metadata(raster_info)
-        self.create_dataset('x', self.x.shape, dtype='f', data=self.x)
-        self.create_dataset('y', self.y.shape, dtype='f', data=self.y)
-
         # Create datasets for stack data
-        if data:
-            shape = (self.Nt, self.Ny, self.Nx)
-            self.create_dataset('data', shape, dtype='f', chunks=chunks)
+        shape = (self.Nt, self.Ny, self.Nx)
+        self.create_dataset('data', shape, dtype='f', chunks=chunks)
 
         # Optional weights dataset
         if weights:
             self.create_dataset('weights', shape, dtype='f', chunks=chunks)
-
-    def set_spatial_metadata(self, raster_info):
-        """
-        Set spatial arrays from a RasterInfo object.
-        """
-        X, Y = raster_info.meshgrid()
-        self.x = X[0,:]
-        self.y = Y[:,0]
-        return
-
+    
     def create_dataset(self, name, shape, dtype='f', chunks=None, **kwargs):
         """
         Create an HDF5 dataset for data.
@@ -161,11 +157,11 @@ class Stack:
         if row >= (self.Ny - half_win) or row < half_win:
             warnings.warn('Requested point outside of stack bounds. Returning NaN.',
                           category=UserWarning)
-            return np.nan
+            return self._nan_tseries.copy()
         if col >= (self.Nx - half_win) or col < half_win:
             warnings.warn('Requested point outside of stack bounds. Returning NaN.',
                           category=UserWarning)
-            return np.nan
+            return self._nan_tseries.copy()
 
         # Spatial slice
         if win_size > 1:

@@ -53,14 +53,14 @@ def inversion(stack, userfile, outdir, cleaned_stack=None,
     # Instantiate and initialize output stacks
     ostacks = {}
     for key in ('full', 'secular', 'seasonal', 'transient', 'sigma'):
-        ostacks[key] = Stack(os.path.join(outdir, 'interp_output_%s.h5' % key), mode='w')
-        ostacks[key].initialize(tfit, stack.hdr, chunks=(1, chunk_ny, chunk_nx))
+        ostacks[key] = Stack(os.path.join(outdir, 'interp_output_%s.h5' % key), mode='w',
+                             init_tdec=tfit, init_rasterinfo=stack.hdr)
+        ostacks[key].init_default_datasets(chunks=(1, chunk_ny, chunk_nx))
 
     # If user wishes to output data stack with outliers removed
     if cleaned_stack is not None:
-        clean_stack = Stack(os.path.join(outdir, cleaned_stack), mode='w')
-        clean_stack.initialize(stack.tdec, stack.hdr, chunks=(1, chunk_ny, chunk_nx),
-                               data=True, weights=True)
+        clean_stack = Stack(os.path.join(outdir, cleaned_stack), mode='w', init_stack=stack)
+        clean_stack.init_default_datasets(chunks=(1, chunk_ny, chunk_nx), weights=True)
 
     # Loop over chunks
     for islice, jslice in chunks:
@@ -98,6 +98,10 @@ def inversion(stack, userfile, outdir, cleaned_stack=None,
         # Loop over pixels in chunk in parallel
         with pymp.Parallel(n_proc) as manager:
             for index in manager.range(npix):
+
+                # Get pixel data
+                d = data[:, index]
+                w = wgts[:, index]
                 
                 # Perform inversion: iterative least squares with outlier detection
                 # Outliers are set to NaN in-place

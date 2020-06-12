@@ -93,7 +93,7 @@ def main(args):
             sigma = 1.0 / w
             axts.errorbar(stack.tdec, d, yerr=sigma, fmt='o')
         else:
-            axts.plot(stack.tdec, d)
+            axts.plot(stack.tdec, d, 'o')
 
         if mstack is not None:
             fit = mstack.timeseries(xy=(x, y), key='data')

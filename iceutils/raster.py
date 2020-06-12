@@ -8,9 +8,11 @@ import gdal
 import osr
 import sys
 
+from .boundary import transform_coordinates
+
 # Map from GDAL data type to numpy
 gdal_type_to_numpy = {
-    gdal.GDT_Byte: np.byte,
+    gdal.GDT_Byte: np.uint8,
     gdal.GDT_Int16: np.int16,
     gdal.GDT_Int32: np.int32,
     gdal.GDT_UInt16: np.uint16,
@@ -19,6 +21,19 @@ gdal_type_to_numpy = {
     gdal.GDT_Float64: np.float64,
     gdal.GDT_CFloat32: np.complex64,
     gdal.GDT_CFloat64: np.complex128
+}
+
+# Map from GDAL data type to Python format string
+gdal_type_to_str = {
+    gdal.GDT_Byte: 'B',
+    gdal.GDT_Int16: 'h',
+    gdal.GDT_Int32: 'i',
+    gdal.GDT_UInt16: 'H',
+    gdal.GDT_UInt32: 'I',
+    gdal.GDT_Float32: 'f',
+    gdal.GDT_Float64: 'd',
+    gdal.GDT_CFloat32: 'ff',
+    gdal.GDT_CFloat64: 'dd'
 }
 
 # Map from numpy dtype to GDAL data type
@@ -37,6 +52,29 @@ numpy_to_gdal_type = {
 class Raster:
     """
     Class that encapsulates raster data and stores an instance of its header info.
+
+    Parameters
+    ----------
+    args: list, optional
+        Positional arguments for either raster file or stack file.
+    data: ndarray, optional
+        Array of raster data.
+    hdr: RasterInfo, optional
+        RasterInfo associated with data.
+    rasterfile: str, optional
+        Filename for GDAL-compatible raster to read.
+    band: int, optional
+        Band number to read from raster. Default: 1.
+    stackfile: str, optional
+        HDF5 file for Stack to read raster data from.
+    h5path: str, optional
+        H5 path from Stack corresponding to input dataset.
+    islice: slice, optional
+        Slice object specifying image rows to subset.
+    jslice: slice, optional
+        Slice object specifying image columns to subset.
+    projWin: list, optional
+        List of [x_max, y_max, x_min, y_min] for geographic bounding box to subset.
     """
 
     def __init__(self,
@@ -44,12 +82,14 @@ class Raster:
                  data=None, hdr=None,
                  rasterfile=None, band=1,
                  stackfile=None, h5path=None,
-                 islice=None, jslice=None):
+                 islice=None, jslice=None,
+                 projWin=None):
 
         # If data and header are provided, save them and return
         if data is not None and hdr is not None:
             self.data = data
             self.hdr = hdr
+            self.filename = None
             return
 
         # Attempt to guess format of generic filename if provided
@@ -61,8 +101,10 @@ class Raster:
                 rasterfile = filename
 
         # Load the header info
-        self.hdr = RasterInfo(rasterfile=rasterfile, stackfile=stackfile,
-                              islice=islice, jslice=jslice)
+        self.hdr = RasterInfo(rasterfile=rasterfile, stackfile=stackfile)
+
+        # Load subset/slicing information
+        islice, jslice = self.hdr.subset_region(projWin=projWin, islice=islice, jslice=jslice)
 
         # Load the raster data
         if rasterfile is not None:
@@ -73,25 +115,94 @@ class Raster:
         else:
             raise ValueError('Must provide GDAL raster of HDF5 stack.')
 
+        # Cache the slices for provenance
+        self.islice = islice
+        self.jslice = jslice
+
+        # Cache raster filename
+        self.rasterfile = rasterfile
+
         return
 
     @staticmethod
     def load_gdal(filename, band=1, islice=None, jslice=None):
         """
-        Load GDAL raster data.
+        Load GDAL raster data from file.
+
+        Parameters
+        ----------
+        filename: str
+            Filename for GDAL-compatible raster to read.
+        band: int, optional
+            Band number to read from raster. Default: 1.
+        islice: slice, optional
+            Slice object specifying image rows to subset.
+        jslice: slice, optional
+            Slice object specifying image columns to subset.
+
+        Returns
+        -------
+        d: ndarray
+            Array for raster data.
         """
+        # Open dataset
         dset = gdal.Open(filename, gdal.GA_ReadOnly)
-        d = dset.GetRasterBand(band).ReadAsArray()
-        if islice is not None:
-            d = d[islice,:]
-        if jslice is not None:
-            d = d[:,jslice]
+
+        # Get band
+        b = dset.GetRasterBand(band)
+
+        # Read whole dataset
+        if islice is None and jslice is None:
+            d = b.ReadAsArray()
+
+        # Or subset using gdal raster functionality
+        else:
+    
+            # Unpack the slice bounds
+            y0, y1 = int(islice.start), int(islice.stop)
+            x0, x1 = int(jslice.start), int(jslice.stop)
+            # Compute buffer size
+            xsize = x1 - x0
+            ysize = y1 - y0
+
+            # Read raster portion
+            scanline = b.ReadRaster(xoff=x0, yoff=y0, xsize=xsize, ysize=ysize,
+                                    buf_xsize=xsize, buf_ysize=ysize, buf_type=b.DataType)
+
+            # Convert to NumPy array
+            fmt = gdal_type_to_str[b.DataType]
+            d = np.frombuffer(scanline, dtype=fmt[0])
+
+            # Special handling for complex values
+            if fmt in ('ff', 'dd'):
+                d = d[0::2] + 1j * d[1::2]
+
+            # Reshape to 2D array and get a copy to allow for read/write
+            d = d.reshape(ysize, xsize).copy()
+        
+        # Return array                    
         return d
 
     @staticmethod
     def load_hdf5(filename, h5path, islice=None, jslice=None):
         """
         Load dataset from HDF5.
+
+        Parameters
+        ----------
+        filename: str
+            HDF5 file for Stack to read raster data from.
+        h5path: str
+            H5 path from Stack corresponding to input dataset.
+        islice: slice, optional
+            Slice object specifying image rows to subset.
+        jslice: slice, optional
+            Slice object specifying image columns to subset.
+
+        Returns
+        -------
+        d: ndarray
+            Array for raster data.
         """
         with h5py.File(filename, 'r') as fid:
             d = fid[h5path][()]
@@ -104,6 +215,21 @@ class Raster:
     def write_gdal(self, filename, dtype=gdal.GDT_Float32, driver='ENVI', epsg=None):
         """
         Write data and header to a GDAL raster.
+        
+        Parameters
+        ----------
+        filename: str
+            Filename to write raster.
+        dtype: int, optional
+            Enum for GDAL datatype. Default: gdal.GDT_Float32
+        driver: str, optional
+            GDAL-compatible raster driver for output raster file. Default: ENVI.
+        epsg: int, optional
+            EPSG code for output. Default: None.
+
+        Returns
+        -------
+        None
         """
         # Create driver
         driver = gdal.GetDriverByName(driver)
@@ -129,7 +255,19 @@ class Raster:
 
     def resample(self, hdr, order=3):
         """
-        Resample raster data to another coordinate system provided by a RasterInfo object.
+        Resample raster data in-place to another coordinate system provided by
+        a RasterInfo object.
+
+        Parameters
+        ----------
+        hdr: RasterInfo
+            RasterInfo specifying output geometry to resample to.
+        order: int, optional
+            Order of interpolating spline. Default: 3.
+
+        Returns
+        -------
+        None
         """
         # If RasterInfo objects are equivalent, do nothing
         if hdr == self.hdr:
@@ -146,7 +284,16 @@ class Raster:
 
     def downsample(self, factor=2):
         """
-        Downsamples by an integer factor.
+        Downsamples raster data in-place by an integer factor.
+
+        Parameters
+        ----------
+        factor: int, optional
+            Downsampling factor. Default: 2.
+
+        Returns
+        -------
+        None
         """
         from skimage.transform import downscale_local_mean
 
@@ -161,7 +308,22 @@ class Raster:
 
     def crop(self, xmin, xmax, ymin, ymax):
         """
-        Crop a raster by its coordinates.
+        Crop a raster in-place using geographic bounds.
+    
+        Parameters
+        ----------
+        xmin: float
+            Minimum X-coordinate.
+        xmax: float
+            Maximum X-coordinate.
+        ymin: float
+            Minimum Y-coordinate.
+        ymax: float
+            Maximum Y-coordinate.
+
+        Returns
+        -------
+        None
         """
         # Crop header and get mask
         xmask, ymask = self.hdr.crop(xmin, xmax, ymin, ymax)
@@ -175,6 +337,28 @@ class Raster:
         """
         Extract a linear transect given two tuples of (X, Y) coordinates of the
         transect end points.
+
+        Parameters
+        ----------
+        point1: list
+            2-element list of [X, Y] for starting point of transect.
+        point2: list
+            2-element list of [X, Y] for ending point of transect.
+        n: int, optional
+            Number of points for transect. Default: 200.
+        order: int, optional
+            Order of interpolating spline. Default: 3.
+        return_location: bool, optional
+            Flag for returning transect coordinates in addition to data. Default: False.
+
+        Returns
+        -------
+        z: ndarray
+            Transect values.
+        x: ndarray
+            Transect X-coordinates (for return_location=True).
+        y: ndarray
+            Transect Y-coordinates (for return_location=True).
         """
         # Create the transect coordinates
         x = np.linspace(point1[0], point2[0], n)
@@ -185,10 +369,10 @@ class Raster:
 
         # Return with or without coordinates
         if return_location:
-            return x, y, z
+            return z, x, y
         else:
             return z
-
+     
     def __getitem__(self, coord):
         """
         Access data at given coordinates.
@@ -254,6 +438,25 @@ class Raster:
 class RasterInfo:
     """
     Class that encapsulates raster size and geographic transform information.
+
+    Parameters
+    ----------
+    rasterfile: str, optional
+        Filename for GDAL-compatible raster to read. 
+    stackfile: str, optional
+        HDF5 file for Stack to read raster data from.
+    X: ndarray, optional
+        Meshgrid of X-coordinates.
+    Y: ndarray, optional
+        Meshgrid of Y-coordinates.
+    band: int, optional
+        Band number to read from raster. Default: 1.
+    epsg: int, optional
+        EPSG code for input geographic data. Default: None.
+    islice: slice, optional
+        Slice object specifying image rows to subset.
+    jslice: slice, optional
+        Slice object specifying image columns to subset.
     """
 
     def __init__(self, rasterfile=None, stackfile=None, X=None, Y=None,
@@ -263,6 +466,7 @@ class RasterInfo:
         """
         if rasterfile is not None:
             self.load_gdal_info(rasterfile, islice=islice, jslice=jslice, band=band)
+            self.rasterfile = rasterfile
         elif stackfile is not None:
             self.load_stack_info(stackfile, islice=islice, jslice=jslice)
         elif X is not None and Y is not None:
@@ -271,9 +475,26 @@ class RasterInfo:
             self.xstart = self.dx = self.ystart = self.dy = self.ny = self.nx = None
             self._epsg = None
 
-    def load_gdal_info(self, rasterfile, islice=None, jslice=None, band=1):
+    def load_gdal_info(self, rasterfile, projWin=None, islice=None, jslice=None, band=1):
         """
         Read raster and geotransform information from GDAL dataset.
+
+        Parameters
+        ----------
+        rasterfile: str
+            Filename for GDAL-compatible raster to read.
+        projWin: list, optional
+            List of [x_max, y_max, x_min, y_min] for geographic bounding box to subset.
+        islice: slice, optional
+            Slice object specifying image rows to subset.
+        jslice: slice, optional
+            Slice object specifying image columns to subset.
+        band: int, optional
+            Band number to read from raster. Default: 1.
+
+        Returns
+        -------
+        None
         """
         # Open GDAL dataset
         dset = gdal.Open(rasterfile, gdal.GA_ReadOnly)
@@ -289,21 +510,16 @@ class RasterInfo:
             self.ystart = self.xstart = 0.0
             self.dx = self.dy = 1.0
 
-        # Extract projection information as an EPSG code
-        proj = osr.SpatialReference(wkt=dset.GetProjection())
-        proj.AutoIdentifyEPSG()
-        self._epsg = int(proj.GetAttrValue('AUTHORITY', 1))
-            
-        # Incorporate row slicing
-        if islice is not None:
-            self.ystart += islice.start * self.dy
-            self.ny = islice.stop - islice.start
-        # Incorporate column slicing
-        if jslice is not None:
-            self.xstart += jslice.start * self.dx
-            self.nx = jslice.stop - jslice.start
-
-        # Set units
+        # Attempt to extract projection information as an EPSG code
+        try:
+            self._epsg = wkt_to_epsg(dset.GetProjection())
+        except TypeError:
+            pass
+        
+        # Optional subset
+        self.subset_region(projWin=projWin, islice=islice, jslice=jslice)
+        
+        # Set units (not yet used)
         self.units = 'm'
 
         # Get data type from band
@@ -316,6 +532,19 @@ class RasterInfo:
     def load_stack_info(self, stackfile, islice=None, jslice=None):
         """
         Read header information from stack file.
+
+        Parameters
+        ----------
+        stackfile: str
+            HDF5 file for Stack to read raster data from.
+        islice: slice, optional
+            Slice object specifying image rows to subset.
+        jslice: slice, optional
+            Slice object specifying image columns to subset.
+    
+        Returns
+        -------
+        None
         """
         with h5py.File(stackfile, 'r') as fid:
             
@@ -352,9 +581,65 @@ class RasterInfo:
             # Set units
             self.units = 'm'
 
+    def subset_region(self, projWin=None, islice=None, jslice=None):
+        """
+        Subset the geographic metadata either by a projection window or image
+        row and column slices.
+
+        Parameters
+        ----------
+        projWin: list
+            List of [x_max, y_max, x_min, y_min] for geographic bounding box to subset.
+        islice: slice, optional
+            Slice object specifying image rows to subset.
+        jslice: slice, optional
+            Slice object specifying image columns to subset.
+    
+        Returns
+        -------
+        islice: slice
+            Slice object specifying image rows to subset.
+        jslice: slice
+            Slice object specifying image columns to subset.
+        """
+        # Convert any projection window into image coordinates
+        if projWin is not None and islice is None and jslice is None:
+
+            # Convert coordinates
+            i0, j0 = self.xy_to_imagecoord(projWin[0], projWin[1])
+            i1, j1 = self.xy_to_imagecoord(projWin[2], projWin[3])
+
+            # Construct slices
+            islice = slice(i0, i1)
+            jslice = slice(j0, j1)
+
+        # Apply row slicing
+        if islice is not None:
+            self.ystart += islice.start * self.dy
+            self.ny = islice.stop - islice.start
+
+        # Apply column slicing
+        if jslice is not None:
+            self.xstart += jslice.start * self.dx
+            self.nx = jslice.stop - jslice.start
+
+        # Return slices
+        return islice, jslice
+
     def set_from_meshgrid(self, X, Y, epsg=None, units='m'):
         """
-        Set header information from meshgrid array.s
+        Set header information from meshgrid array.
+
+        Parameters
+        ----------
+        X: ndarray, optional
+            Meshgrid of X-coordinates.
+        Y: ndarray, optional
+            Meshgrid of Y-coordinates.
+        epsg: int, optional
+            EPSG code for input geographic data. Default: None.
+        units: str, optional
+            Units of coordinates.
         """
         self.xstart = X[0,0]
         self.ystart = Y[0,0]
@@ -368,6 +653,21 @@ class RasterInfo:
         """
         Crop a header by its geographic coordinates. Rounds to nearest pixel. Returns
         column/row masks.
+
+        Parameters
+        ----------
+        xmin: float
+            Minimum X-coordinate.
+        xmax: float
+            Maximum X-coordinate.
+        ymin: float
+            Minimum Y-coordinate.
+        ymax: float
+            Maximum Y-coordinate.
+
+        Returns
+        -------
+        None
         """
         # Construct coordinates
         x = self.xcoords
@@ -386,6 +686,64 @@ class RasterInfo:
         self.ny = len(y)
 
         return xmask, ymask
+
+    def read_GCPs(self, rasterfile=None, gcp_epsg=None, epsg_out=None, s=5):
+        """
+        Load ground control points (GCPs) from gdal Dataset. Then, construct 2D
+        interpolating splines that represent mapping from image to georeferenced
+        coordinates with mapping determined from GCPs.
+
+        Parameters
+        ----------
+        rasterfile: str, optional
+            GDAL raster file to read GCPs from. Use cached source raster by default.
+        gcp_epsg: int, optional
+            Override EPSG code for GCP coordinates. Default determined from GCP projection.
+        epsg_out: int, optional
+            EPSG code for output X-Y coordinates. It not provided, use GCP EPSG.
+        s: float, optional
+            Smoothing factor for splines. See docs for SmoothBivariateSpline. Default: 5.
+
+        Returns
+        -------
+        None
+        """
+        from scipy.interpolate import SmoothBivariateSpline
+
+        # Specify filename
+        if rasterfile is None:
+            rasterfile = self.rasterfile
+        assert rasterfile is not None, 'No valid raster file specified.'
+
+        # Read GCP coordinates
+        ds = gdal.Open(rasterfile, gdal.GA_ReadOnly)
+        GCPs = ds.GetGCPs()
+
+        # Read GCP projection info if not specified
+        if gcp_epsg is None:
+            gcp_proj = ds.GetGCPProjection()
+            gcp_epsg = wkt_to_epsg(gcp_proj)
+    
+        # Close the dataset
+        ds = None
+
+        # Unpack GCP information
+        N_gcp = len(GCPs)
+        pixel = np.zeros(N_gcp)
+        line = np.zeros(N_gcp)
+        x = np.zeros(N_gcp)
+        y = np.zeros(N_gcp)
+        for i, gcp in enumerate(GCPs):
+            pixel[i], line[i], x[i], y[i] = gcp.GCPPixel, gcp.GCPLine, gcp.GCPX, gcp.GCPY
+        
+        # Convert GCP coordinates to another projection if needed
+        if epsg_out != gcp_epsg:
+            x, y = transform_coordinates(x, y, gcp_epsg, epsg_out)
+
+        # Build splines
+        self._gcp_spline_row = SmoothBivariateSpline(x, y, line, s=s)
+        self._gcp_spline_col = SmoothBivariateSpline(x, y, pixel, s=s)
+        self._gcp_epsg = epsg_out
 
     def __eq__(self, other):
         """
@@ -514,46 +872,51 @@ class RasterInfo:
         x = self.xstart + col * self.dx
         return x, y
 
+    def xy_to_imagecoord_gcp(self, x, y):
+        """
+        Converts geographic XY point to row and column coordinate using 2D splines
+        formed from ground control points (GCPs). Must have called
+        RasterInfo.read_GCPs first.
+        """
+        # Check for existence of GCP splines
+        if not hasattr(self, '_gcp_spline_row') or not hasattr(self, '_gcp_spline_col'):
+            raise ValueError('Must run RasterInfo.read_GCPs first.')
 
-def load_ann(filename, comment=';'):
-    """
-    Load UAVSAR annotation file values into dictionary.
-    """
-    ann = {}
-    with open(filename, 'r') as fid:
-        for input_line in fid:
+        # Evaluate splines
+        col = self._gcp_spline_col(x, y, grid=False)
+        row = self._gcp_spline_row(x, y, grid=False)
 
-            # Skip empty lines
-            line = input_line.strip()
-            if len(line) < 1:
-                continue
+        # Return
+        return row, col
 
-            # Skip lines that start with a comment
-            if line.startswith(comment):
-                continue
 
-            # Split the line
-            items = line.split(' = ')
-            if len(items) < 2:
-                continue
-
-            # Parse first item for key
-            key = items[0].split('(')[0].strip()
-
-            # Strip second item of any trailing comments
-            value_str = items[1].strip()
-            ind_comment = value_str.find(comment)
-            if ind_comment > -1:
-                value_str = value_str[:ind_comment].strip()
-            
-            # Store in dictionary
-            ann[key] = value_str
-
-    return ann
+# --------------------------------------------------------------------------------
+# Global utility functions
+# --------------------------------------------------------------------------------
 
 def interpolate_raster(raster, x, y, ref_hdr=None, order=3, time_index=None):
     """
     Interpolate raster at arbitrary points.
+
+    Parameters
+    ----------
+    raster: Raster
+        Raster to interpolate.
+    x: ndarray
+        X-coordinates for output interpolation grid.
+    y: ndarray
+        Y-coordinates for output interpolation grid.
+    ref_hdr: RasterInfo, optional
+        RasterInfo to read output coordinates from. Default: None.
+    order: int, optional
+        Order of interpolating spline. Default: 3.
+    time_index: int, optional
+        Time index to extract time slice from raster stack. Default: None.
+
+    Returns
+    -------
+    values: ndarray
+        Interpolated values.
     """
     # Extract time slice if index provided
     if time_index is not None:
@@ -567,6 +930,26 @@ def interpolate_raster(raster, x, y, ref_hdr=None, order=3, time_index=None):
 def interpolate_array(array, hdr, x, y, ref_hdr=None, order=3):
     """
     Interpolate 2D array at arbitrary points.
+
+    Parameters
+    ----------
+    array: ndarray
+        2D array to interpolate.
+    hdr: RasterInfo
+        RasterInfo object specifying geographic data for array.
+    x: ndarray
+        X-coordinates for output interpolation grid.
+    y: ndarray
+        Y-coordinates for output interpolation grid.
+    ref_hdr: RasterInfo, optional
+        RasterInfo to read output coordinates from. Default: None.
+    order: int, optional
+        Order of interpolating spline. Default: 3.
+
+    Returns
+    -------
+    values: ndarray
+        Interpolated values.
     """
     # If a RasterInfo object has been passed, generate output coordinates
     if ref_hdr is not None:
@@ -593,6 +976,26 @@ def warp(raster, target_epsg=None, target_hdr=None, target_dims=None, order=3, n
     """
     Warp raster to another RasterInfo hdr object with a different projection system.
     Currently only supports EPSG projection representations.
+
+    Parameters
+    ----------
+    raster: Raster
+        Raster object to warp.
+    target_epsg: int, optional
+        Specific EPSG of output reference system. Default: None.
+    target_hdr: RasterInfo, optional
+        RasterInfo specifying output geographical grid and projection.
+    target_dims: (list, tuple), optional
+        Output warped image dimensions. Default: None.
+    order: int, optional
+        Order of interpolating spline. Default: 3.
+    n_proc: int, optional
+        Number of processors to run warping on. Default: 1.
+
+    Returns
+    -------
+    warped_raster: Raster
+        Output warped Raster object.
     """
     # Check source RasterInfo has EPSG value set
     assert raster.hdr.epsg is not None, 'No EPSG information found for source raster.'
@@ -663,9 +1066,75 @@ def warp(raster, target_epsg=None, target_hdr=None, target_dims=None, order=3, n
     # Return new raster
     return Raster(data=data_warped, hdr=target_hdr)
 
+def warp_with_gcp_splines(raster, gcp_hdr, x=None, y=None, out_hdr=None, order=3):
+    """
+    Warp a raster to output grid using pre-constructed 2D interpolation splines
+    formed from GCPs. Must call Raster.read_GCPs first.
+
+    Parameters
+    ----------
+    raster: Raster
+        Input raster to warp.
+    gcp_hdr: RasterInfo
+        Input RasterInfo object with GCP spline attributes.
+    x: ndarry, optional
+        X-coordinates for output grid.
+    y: ndarray, optional
+        Y-coordinates for output grid.
+    out_hdr: RasterInfo, optional
+        RasterInfo for specifying output coordinates if not otherwise specified.
+    order: int, optional
+        Order of interpolation scheme. Default: 3.
+
+    Returns
+    -------
+    out_raster: Raster
+        Output warped raster object.
+    """
+    # Get output coordinates from ref_hdr if not specified
+    if x is None and y is None and out_hdr is not None:
+        assert out_hdr.epsg == gcp_hdr._gcp_epsg, 'EPSG mismatch with GCP splines.'
+        x, y = out_hdr.meshgrid()
+    else:
+        out_hdr = RasterInfo(X=x, Y=y, epsg=gcp_hdr._gcp_epsg)
+
+    # Evalute splines to get image coordinates for output grid
+    grid_row, grid_col = gcp_hdr.xy_to_imagecoord_gcp(x.ravel(), y.ravel())
+
+    # Adjust image coordinates for any offsets from subsetting
+    if raster.islice is not None:
+        grid_row -= raster.islice.start
+    if raster.jslice is not None:
+        grid_col -= raster.jslice.start
+
+    # Interpolate
+    points = np.vstack((grid_row, grid_col))
+    out = map_coordinates(raster.data, points, prefilter=False, mode='constant', cval=np.nan,
+                          order=order)
+
+    # Create new Raster
+    return Raster(data=out.reshape(x.shape), hdr=out_hdr)
+
 def write_array_as_raster(array, hdr, filename, epsg=None, dtype=None):
     """
     Convenience function to write a NumPy array to a raster file with a given RasterInfo.
+
+    Parameters
+    ----------
+    array: ndarray
+        2D array to write values out.
+    hdr: RasterInfo
+        RasterInfo specifying geographical grid and projection for array.
+    filename: str
+        Output filename.
+    epsg: int, optional
+        Specific EPSG code for output projection. Default: None.
+    dtype: int, optional
+        Enum for GDAL datatype for output raster. Default: None.
+
+    Returns
+    -------
+    None
     """
     # Check shapes
     assert array.shape == (hdr.ny, hdr.nx), 'Incompatible shapes'
@@ -734,6 +1203,16 @@ def render_kml(raster, filename, dpi=300, cmap='viridis', clim=None, n_proc=1):
 
     return
 
+def wkt_to_epsg(wkt):
+    """
+    Convenience function to convert a projection formatted as a WKT (Well Known Transformation)
+    to an EPSG code.
+    """
+    proj = osr.SpatialReference(wkt=wkt)
+    proj.AutoIdentifyEPSG()
+    epsg = int(proj.GetAttrValue('AUTHORITY', 1))
+    return epsg
+
 def get_chunks(dims, chunk_y, chunk_x):
     """
     Utility function to get chunk bounds.
@@ -780,5 +1259,53 @@ def get_chunks(dims, chunk_y, chunk_x):
             chunks.append([slice(istart,iend), slice(jstart,jend)])
 
     return chunks
+
+def load_ann(filename, comment=';'):
+    """
+    Load UAVSAR annotation file values into dictionary.
+
+    Parameters
+    ----------
+    filename: str
+        Filename for UAVSAR annotation file.
+    comment: str, optional
+        Comment string. Default: ';'
+
+    Returns
+    -------
+    ann: dict
+        Dictionary of metadata values.
+    """
+    ann = {}
+    with open(filename, 'r') as fid:
+        for input_line in fid:
+
+            # Skip empty lines
+            line = input_line.strip()
+            if len(line) < 1:
+                continue
+
+            # Skip lines that start with a comment
+            if line.startswith(comment):
+                continue
+
+            # Split the line
+            items = line.split(' = ')
+            if len(items) < 2:
+                continue
+
+            # Parse first item for key
+            key = items[0].split('(')[0].strip()
+
+            # Strip second item of any trailing comments
+            value_str = items[1].strip()
+            ind_comment = value_str.find(comment)
+            if ind_comment > -1:
+                value_str = value_str[:ind_comment].strip()
+            
+            # Store in dictionary
+            ann[key] = value_str
+
+    return ann
 
 # end of file
