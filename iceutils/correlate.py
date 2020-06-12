@@ -12,7 +12,7 @@ from .raster import Raster, RasterInfo
 
 def offset_map(master_raster, slave_raster, win_x=64, win_y=64, search=20, margin=50,
                skip_x=32, skip_y=32, coarse=False, coarse_over=False, dft=False,
-               snr_thresh=5.0, n_proc=1):
+               snr_thresh=5.0, amp_thresh=0.2, n_proc=1):
     """
     Build maps of dense offsets between two rasters. Uses template matching (amplitude
     cross correlation) or phase ramp estimation (default).
@@ -44,6 +44,9 @@ def offset_map(master_raster, slave_raster, win_x=64, win_y=64, search=20, margi
     snr_thresh: float, optional
         Lower SNR threshold at which to set initial guess for offsets to 0 (only
         used for phase ramp estimation). Default: 5.0.
+    amp_thresh: float, optional
+        Minimum median amplitude value within reference window to compute an offset.
+        Default: 0.2.
     n_proc: int, optional
         Number of parallel processors. Default: 1.
 
@@ -114,7 +117,7 @@ def offset_map(master_raster, slave_raster, win_x=64, win_y=64, search=20, margi
             abs_master = np.abs(master)
 
             # Check if values are large enough
-            if np.median(abs_master) < 0.2:
+            if np.median(abs_master) < amp_thresh:
                 aoff[out_row, out_col] = np.nan
                 roff[out_row, out_col] = np.nan
                 snr[out_row, out_col] = np.nan
@@ -173,7 +176,7 @@ def offset_map(master_raster, slave_raster, win_x=64, win_y=64, search=20, margi
     s_raster = Raster(data=snr, hdr=out_hdr)
 
     return a_raster, r_raster, s_raster
-    
+
 
 class Correlator:
     """
@@ -224,7 +227,7 @@ class TemplateMatcher(Correlator):
 
         return
 
-    def correlate(self, master, slave, oversample=False, method=cv.TM_CCOEFF, order=2):
+    def correlate(self, master, slave, oversample=False, method=cv.TM_CCORR_NORMED, order=2):
         """
         Use template matching to construct correlation surface.
 
@@ -237,7 +240,7 @@ class TemplateMatcher(Correlator):
         oversample: bool, optional
             Perform oversampling of correlation surface. Default: False.
         method: int, optional
-            Enumerated value for OpenCV template matching method. Default: cv.TM_CCOEFF.
+            Enumerated value for OpenCV template matching method. Default: cv.TM_CCORR_NORMED.
         order: int, optional
             Order of spline interpolation. Default: 2.
 

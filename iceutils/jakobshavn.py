@@ -1,7 +1,7 @@
 #-*- coding: utf-8 -*-
 
 import numpy as np
-from .boundary import Boundary, smoothe_line
+from .boundary import Boundary, smoothe_line, transform_coordinates
 import os
 
 def load_glacier_boundaries(smooth=True, km=True, s=0.25, path=None):
@@ -88,7 +88,8 @@ def load_centerline(smooth=True, km=True, s=0.25, path=None, n=200):
 
     return centerline
 
-def load_extended_centerline(smooth=True, km=True, s=0.25, n=200, path=None, tpath=None):
+def load_extended_centerline(smooth=True, km=True, s=0.25, n=200, path=None, tpath=None,
+                             txt=False):
 
     # Scale factor
     if km:
@@ -99,8 +100,11 @@ def load_extended_centerline(smooth=True, km=True, s=0.25, n=200, path=None, tpa
     # Load transect along glacier
     if path is None:
         path = '/data0/briel/jakobshavn/velocity/giant2/long_term_analysis/along_flow_points.npy'
-    tpts = np.load(path)
-    cols, rows, x, y = [tpts[:,j] for j in range(4)]
+    if txt:
+        x, y = np.loadtxt(path, unpack=True)
+    else:
+        tpts = np.load(path)
+        cols, rows, x, y = [tpts[:,j] for j in range(4)]
     x *= scale
     y *= scale
 
@@ -110,10 +114,7 @@ def load_extended_centerline(smooth=True, km=True, s=0.25, n=200, path=None, tpa
     lon, lat = np.loadtxt(tpath, unpack=True)
 
     # Convert to polar stereographic
-    import pyproj
-    polar = pyproj.Proj(init='EPSG:3413')
-    wgs84 = pyproj.Proj(init='EPSG:4326')
-    tx, ty = pyproj.transform(wgs84, polar, lon, lat)
+    tx, ty = transform_coordinates(lon, lat, epsg_in=4326, epsg_out=3413)
     tx *= scale
     ty *= scale
 
