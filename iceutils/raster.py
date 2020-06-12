@@ -177,8 +177,8 @@ class Raster:
             if fmt in ('ff', 'dd'):
                 d = d[0::2] + 1j * d[1::2]
 
-            # Reshape to 2D array
-            d = d.reshape(ysize, xsize)
+            # Reshape to 2D array and get a copy to allow for read/write
+            d = d.reshape(ysize, xsize).copy()
         
         # Return array                    
         return d
@@ -715,11 +715,16 @@ class RasterInfo:
             rasterfile = self.rasterfile
         assert rasterfile is not None, 'No valid raster file specified.'
 
-        # Read GCP info
+        # Read GCP coordinates
         ds = gdal.Open(rasterfile, gdal.GA_ReadOnly)
-        gcp_proj = ds.GetGCPProjection()
-        gcp_epsg = wkt_to_epsg(gcp_proj)
         GCPs = ds.GetGCPs()
+
+        # Read GCP projection info if not specified
+        if gcp_epsg is None:
+            gcp_proj = ds.GetGCPProjection()
+            gcp_epsg = wkt_to_epsg(gcp_proj)
+    
+        # Close the dataset
         ds = None
 
         # Unpack GCP information
