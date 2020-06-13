@@ -3,6 +3,7 @@
 import jax.numpy as np
 import matplotlib.pyplot as plt
 from scipy.interpolate import UnivariateSpline, interp1d
+from functools import partial
 import jax
 import sys
 
@@ -30,7 +31,8 @@ class IceStream:
         Scale factor for boundary conditions. Default: 500.0.
     """
     
-    def __init__(self, profile, calving_force, A, cb=6.0e2, n=3, m=3, bv_scale=500.0):
+    def __init__(self, profile, calving_force, A, cb=6.0e2, n=3, m=3, bv_scale=500.0,
+                 nu_eps=1.0e-8):
         """
         Initialize IceStream class.
         """
@@ -52,7 +54,8 @@ class IceStream:
 
         # Epsilon value when computing the effective viscosity
         # When grid cell size gets smaller, this should also be smaller to ensure stability
-        self.nu_eps = 1.0e-8
+        #self.nu_eps = 1.0e-8
+        self.nu_eps = nu_eps
 
         # The force at the calving front
         self.fs = calving_force
@@ -65,6 +68,7 @@ class IceStream:
         # Initialize jacobian function
         self.fjac = jax.jacfwd(self.compute_pde_values, 0)
 
+    @partial(jax.jit, static_argnums=(0,))
     def update_nu(self, u):
         """
         Computes effective viscosity for a given velocity profile.
@@ -74,6 +78,7 @@ class IceStream:
         Du = np.dot(D, u)
         self.nu = A**(-1 / n) / (np.abs(Du)**((n - 1) / n) + self.nu_eps)
 
+    @partial(jax.jit, static_argnums=(0,))
     def compute_pde_values(self, u, scale=1.0e-2, return_components=False):
         """
         Compute vector of PDE residuals for a given velocity profile.
@@ -136,6 +141,7 @@ class IceStream:
         # Done
         return F2
 
+    @partial(jax.jit, static_argnums=(0,))
     def compute_jacobian(self, u, scale=1.0e-2):
         """ 
         Compute Jacobian of residual array with respect to a given velocity array.
