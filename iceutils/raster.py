@@ -2,6 +2,7 @@
 
 import numpy as np
 from scipy.ndimage.interpolation import map_coordinates
+import warnings
 import pyproj
 import h5py
 import gdal
@@ -605,13 +606,24 @@ class RasterInfo:
         # Convert any projection window into image coordinates
         if projWin is not None and islice is None and jslice is None:
 
-            # Convert coordinates
-            i0, j0 = self.xy_to_imagecoord(projWin[0], projWin[1])
-            i1, j1 = self.xy_to_imagecoord(projWin[2], projWin[3])
+            # First check the points
+            in_bounds = self.contains_point(projWin[0], projWin[1])
+            in_bounds *= self.contains_point(projWin[2], projWin[3])
 
-            # Construct slices
-            islice = slice(i0, i1)
-            jslice = slice(j0, j1)
+            # If not in bounds, return slices for full image
+            if not in_bounds:
+                warnings.warn('projWin outside of bounds; returning full extent.')
+                islice = slice(0, self.ny)
+                jslice = slice(0, self.nx)
+
+            # Otherwise, compute slices
+            else:
+                # Convert coordinates
+                i0, j0 = self.xy_to_imagecoord(projWin[0], projWin[1])
+                i1, j1 = self.xy_to_imagecoord(projWin[2], projWin[3])
+                # Construct slices
+                islice = slice(i0, i1)
+                jslice = slice(j0, j1)
 
         # Apply row slicing
         if islice is not None:
@@ -755,6 +767,33 @@ class RasterInfo:
                 return False
             if self.units != other.units:
                 return False
+        return True
+
+    def contains_point(self, x, y):
+        """
+        Convenience function to check whether a coordinate is within the geographic
+        extent of the raster. Coordinate must have same projection as raster.
+
+        Parameters
+        ----------
+        x: float
+            Input X-coordinate.
+        y: float
+            Input Y-coordinate.
+
+        Returns
+        -------
+        flag: bool
+            Boolean specifying whether point lies within bounds.
+        """
+        # Convert coordinate to image coordinate
+        row, col = self.xy_to_imagecoord(x, y)
+        
+        # Check bounds
+        if row < 0 or row > (self.ny - 1):
+            return False
+        if col < 0 or col > (self.nx - 1):
+            return False
         return True
 
     def convert_units(self, out_units):
