@@ -13,7 +13,7 @@ class Stack:
     Class that encapsulates standard HDF5 stack file.
     """
 
-    def __init__(self, filename, mode='r',
+    def __init__(self, filename, mode='r', fmt='NHW',
                  init_stack=None, init_tdec=None, init_rasterinfo=None,
                  init_data=False):
 
@@ -23,6 +23,11 @@ class Stack:
         # Store the mode
         assert mode in ('r', 'r+', 'w', 'a'), 'Unsupported HDF5 file open mode'
         self.mode = mode
+
+        # Store the stack storage layout
+        fmt = fmt.upper()
+        assert fmt in ('NHW', 'HWN'), 'Unsupported stack format.'
+        self.fmt = fmt
 
         # Open HDF5 file 
         self.fid = h5py.File(filename, self.mode)
@@ -71,7 +76,10 @@ class Stack:
         Initialize default datasets 'data' and (optionally) 'weights'.
         """
         # Create datasets for stack data
-        shape = (self.Nt, self.Ny, self.Nx)
+        if self.fmt == 'NHW':
+            shape = (self.Nt, self.Ny, self.Nx)
+        elif self.fmt == 'HWN':
+            shape = (self.Ny, self.Nx, self.Nt)
         self.create_dataset('data', shape, dtype='f', chunks=chunks)
 
         # Optional weights dataset
@@ -117,25 +125,37 @@ class Stack:
         """
         Extract Stack 2d slice at given time index.
         """
-        return self._datasets[key][index, :, :]
+        if self.fmt == 'NHW':
+            return self._datasets[key][index, :, :]
+        elif self.fmt == 'HWN':
+            return self._datasets[key][:, :, index]
 
     def set_slice(self, index, data, key='data'):
         """
         Set Stack 2d slice at given time index.
         """
-        self._datasets[key][index, :, :] = data
+        if self.fmt == 'NHW':
+            self._datasets[key][index, :, :] = data
+        elif self.fmt == 'HWN':
+            self._datasets[key][:, :, index] = data
 
     def get_chunk(self, slice_y, slice_x, key='data'):
         """
         Get a 3d chunk of data defined by 2d slice objects.
         """
-        return self._datasets[key][:, slice_y, slice_x]
+        if self.fmt == 'NHW':
+            return self._datasets[key][:, slice_y, slice_x]
+        elif self.fmt == 'HWN':
+            return self._datasets[key][slice_y, slice_x, :]
 
     def set_chunk(self, slice_y, slice_x, data, key='data'):
         """
         Set a 3d chunk of data defined by 2d slice objects.
         """
-        self._datasets[key][:, slice_y, slice_x] = data
+        if self.fmt == 'NHW':
+            self._datasets[key][:, slice_y, slice_x] = data
+        elif self.fmt == 'HWN':
+            self._datasets[key][slice_y, slice_x, :] = data
 
     def timeseries(self, xy=None, coord=None, key='data', win_size=1):
         """
@@ -171,11 +191,14 @@ class Stack:
             islice, jslice = row, col
 
         # Extract the data
-        data = self._datasets[key][:, islice, jslice]
-
-        # Average
-        if win_size > 1:
-            data = np.nanmean(data, axis=(1, 2))
+        if self.fmt == 'NHW':
+            data = self._datasets[key][:, islice, jslice]
+            if win_size > 1:
+                data = np.nanmean(data, axis=(1, 2))
+        elif self.fmt == 'HWN':
+            data = self._datasets[key][islice, jslice, :]
+            if win_size > 1:
+                data = np.nanmean(data, axis=(0, 1))
 
         # Done
         return data
@@ -195,13 +218,17 @@ class Stack:
         
         # Initialize dataset in output stack
         Ny, Nx = ref_hdr.shape
-        shape = (self.Nt, Ny, Nx)
+        if self.fmt == 'NHW':
+            shape = (self.Nt, Ny, Nx)
+        elif self.fmt == 'HWN':
+            shape = (Ny, Nx, self.Nt)
         output.create_dataset(key, shape, dtype=dtype, chunks=chunks)
 
         # Loop over slices and interpolate
         for k in tqdm(range(self.Nt)):
             d = self.slice(k, key=key)
-            output[key][k,:,:] = interpolate_array(d, self.hdr, None, None, ref_hdr=ref_hdr)
+            d_interp = interpolate_array(d, self.hdr, None, None, ref_hdr=ref_hdr)
+            output.set_slice(k, d_interp, key=key)
 
         # Done
         return
