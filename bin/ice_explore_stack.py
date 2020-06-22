@@ -31,6 +31,8 @@ def parse():
         help='Color limits for display.')
     parser.add_argument('-sigma', action='store_true',
         help='Plot errobars using weights dataset.')
+    parser.add_argument('-initial', action='store_true',
+        help='Use initial frame for map instead of stack mean.')
     return parser.parse_args()
 
 def main(args):
@@ -38,8 +40,11 @@ def main(args):
     # Load the stack
     stack = ice.Stack(args.stackfile)
 
-    # Compute mean
-    mean = np.nanmean(stack[args.key], axis=0)
+    # Get frame
+    if args.initial:
+        mean = stack.get_slice(0, key=args.key)
+    else:
+        mean = stack.mean(key=args.key)
 
     # If model directory is given, load model stack (full fit)
     mstack = None
