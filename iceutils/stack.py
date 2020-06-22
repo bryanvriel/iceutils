@@ -24,11 +24,6 @@ class Stack:
         assert mode in ('r', 'r+', 'w', 'a'), 'Unsupported HDF5 file open mode'
         self.mode = mode
 
-        # Store the stack storage layout
-        fmt = fmt.upper()
-        assert fmt in ('NHW', 'HWN'), 'Unsupported stack format.'
-        self.fmt = fmt
-
         # Open HDF5 file 
         self.fid = h5py.File(filename, self.mode)
 
@@ -36,6 +31,12 @@ class Stack:
         if self.mode in ('r', 'r+'):
             self.hdr = RasterInfo(stackfile=filename)
             self.tdec = self.fid['tdec'][()]
+
+            # Also try to read format attribute
+            try:
+                self.fmt = self.fid.attrs['format']
+            except KeyError:
+                self.fmt = fmt
 
             # Initialize datasets dictionary
             for key in self.fid.keys():
@@ -57,10 +58,11 @@ class Stack:
             else:
                 raise ValueError('Must supply init_stack or init_tdec+init_rasterinfo.')
 
-            # Set metadata datasets
+            # Set metadata datasets and attributes
             self.fid['x'] = self.hdr.xcoords
             self.fid['y'] = self.hdr.ycoords
             self.fid['tdec'] = self.tdec
+            self.fid.attrs['format'] = fmt; self.fmt = fmt
 
         # Initialize a NaN time series
         self._nan_tseries = np.full(self.tdec.shape, np.nan, dtype='f')
@@ -156,6 +158,15 @@ class Stack:
             self._datasets[key][:, slice_y, slice_x] = data
         elif self.fmt == 'HWN':
             self._datasets[key][slice_y, slice_x, :] = data
+
+    def mean(self, key='data'):
+        """
+        Compute mean along time dimension.
+        """
+        if self.fmt == 'NHW':
+            return np.nanmean(self._datasets[key], axis=0)
+        elif self.fmt == 'HWN':
+            return np.nanmean(self._datasets[key], axis=2)
 
     def timeseries(self, xy=None, coord=None, key='data', win_size=1):
         """
