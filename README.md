@@ -8,15 +8,15 @@ matplotlib
 gdal
 h5py
 pyproj
-pymp
 scikit-learn
 scikit-image
 tqdm
-cvxopt
-opencv (optional)
 pint
+pymp
+cvxopt (optional)
+opencv (optional)
 ```
-With the exception of `pymp` and `pint`, all of the packages can be installed via Anaconda using their main channel. Also note that the `opencv` package is optional and only used for the `iceutils.correlate` module. The installation process can be streamlined by copying those packages into a `requirements.txt` file and running:
+With the exception of `pymp` and `pint`, all of the packages can be installed via Anaconda using their main channel. Also note that the packages `cvxopt` and `opencv` are optional and only used for the `iceutils.tseries` and `iceutils.correlate` modules, respectively. The installation process can be streamlined by copying those packages into a `requirements.txt` file and running:
 ```
 conda install --file requirements.txt
 ```
@@ -41,6 +41,12 @@ In the cloned directory, you'll find several Python source files, each containin
 import iceutils as ice
 
 t = ice.generateRegularTimeArray(tmin, tmax)
+```
+### Known installation issues
+1. Out-of-date `pyproj`: for some of the routines in `ice.Raster`, you need to have a version of `pyproj` > 2.0. However, some conda environments will only allow you to install versions 1.9.x. A temporary fix is to uninstall `pyproj` from conda and install it with `pip`, e.g.:
+```
+conda uninstall pyproj
+pip install pyproj
 ```
 
 ## Raster interface
