@@ -16,8 +16,13 @@ try:
 except ImportError:
     pass
 
-# Submodules
-from . import tseries
+# tseries requires cvxopt
+try:
+    from . import tseries
+except ImportError:
+    pass
+
+# Other submodules
 from . import sim
 
 # Site-dependent modules
