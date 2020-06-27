@@ -168,6 +168,15 @@ class Stack:
         elif self.fmt == 'HWN':
             return np.nanmean(self._datasets[key], axis=2)
 
+    def std(self, key='data'):
+        """
+        Compute standard deviation along time dimension.
+        """
+        if self.fmt == 'NHW':
+            return np.nanstd(self._datasets[key], axis=0)
+        elif self.fmt == 'HWN':
+            return np.nanstd(self._datasets[key], axis=2)
+
     def timeseries(self, xy=None, coord=None, key='data', win_size=1):
         """
         Extract time series at a given spatial coordinate. Optionally extract a window of
@@ -393,6 +402,33 @@ class SumStack(MultiStack):
         for stack in self.stacks:
             dsum += stack.get_chunk(slice_y, slice_x, key=key)
         return dsum
+
+
+# --------------------------------------------------------------------------------
+# Global utility functions
+# --------------------------------------------------------------------------------
+
+
+def h5read(filename, dataset):
+    """
+    Mimics the MATLAB function h5read for reading into a memory a specific dataset
+    provided by an H5 path.
+
+    Parameters
+    ----------
+    filename: str
+        Filename of HDF5 file to read from.
+    dataset: str
+        H5 path for dataset.
+
+    Returns
+    -------
+    data: ndarray
+        Array for data.
+    """
+    with h5py.File(filename, 'r') as fid:
+        data = fid[dataset][()]
+    return data
 
 
 # end of file
