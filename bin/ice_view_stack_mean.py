@@ -33,7 +33,7 @@ def main(args):
     stack = ice.Stack(args.stackfile)
 
     # Compute mean
-    mean = np.nanmean(stack[args.key][()], axis=0)
+    mean = stack.mean(key=args.key)
 
     # Load reference SAR image
     if args.ref is not None:
