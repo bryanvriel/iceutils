@@ -158,7 +158,7 @@ class Raster:
 
         # Or subset using gdal raster functionality
         else:
-    
+
             # Unpack the slice bounds
             y0, y1 = int(islice.start), int(islice.stop)
             x0, x1 = int(jslice.start), int(jslice.stop)
@@ -180,8 +180,8 @@ class Raster:
 
             # Reshape to 2D array and get a copy to allow for read/write
             d = d.reshape(ysize, xsize).copy()
-        
-        # Return array                    
+
+        # Return array
         return d
 
     @staticmethod
@@ -216,7 +216,7 @@ class Raster:
     def write_gdal(self, filename, dtype=gdal.GDT_Float32, driver='ENVI', epsg=None):
         """
         Write data and header to a GDAL raster.
-        
+
         Parameters
         ----------
         filename: str
@@ -280,7 +280,7 @@ class Raster:
         # Update members
         self.data = data
         self.hdr = hdr
-        
+
         return
 
     def downsample(self, factor=2):
@@ -298,7 +298,7 @@ class Raster:
         """
         from skimage.transform import downscale_local_mean
 
-        # Perform downscaling via local mean 
+        # Perform downscaling via local mean
         self.data = downscale_local_mean(self.data, (factor, factor))
 
         # Create new header
@@ -310,7 +310,7 @@ class Raster:
     def crop(self, xmin, xmax, ymin, ymax):
         """
         Crop a raster in-place using geographic bounds.
-    
+
         Parameters
         ----------
         xmin: float
@@ -373,7 +373,7 @@ class Raster:
             return z, x, y
         else:
             return z
-     
+
     def __getitem__(self, coord):
         """
         Access data at given coordinates.
@@ -443,7 +443,7 @@ class RasterInfo:
     Parameters
     ----------
     rasterfile: str, optional
-        Filename for GDAL-compatible raster to read. 
+        Filename for GDAL-compatible raster to read.
     stackfile: str, optional
         HDF5 file for Stack to read raster data from.
     X: ndarray, optional
@@ -516,10 +516,10 @@ class RasterInfo:
             self._epsg = wkt_to_epsg(dset.GetProjection())
         except TypeError:
             pass
-        
+
         # Optional subset
         self.subset_region(projWin=projWin, islice=islice, jslice=jslice)
-        
+
         # Set units (not yet used)
         self.units = 'm'
 
@@ -542,13 +542,13 @@ class RasterInfo:
             Slice object specifying image rows to subset.
         jslice: slice, optional
             Slice object specifying image columns to subset.
-    
+
         Returns
         -------
         None
         """
         with h5py.File(stackfile, 'r') as fid:
-            
+
             # Load coordinates
             try:
                 X = fid['x'][()]
@@ -569,7 +569,7 @@ class RasterInfo:
             # Incorporate column slicing
             if jslice is not None:
                 X = X[jslice]
-        
+
             # Set attributes
             self.xstart = X[0]
             self.ystart = Y[0]
@@ -599,7 +599,7 @@ class RasterInfo:
             Slice object specifying image rows to subset.
         jslice: slice, optional
             Slice object specifying image columns to subset.
-    
+
         Returns
         -------
         islice: slice
@@ -739,7 +739,7 @@ class RasterInfo:
         if gcp_epsg is None:
             gcp_proj = ds.GetGCPProjection()
             gcp_epsg = wkt_to_epsg(gcp_proj)
-    
+
         # Close the dataset
         ds = None
 
@@ -751,7 +751,7 @@ class RasterInfo:
         y = np.zeros(N_gcp)
         for i, gcp in enumerate(GCPs):
             pixel[i], line[i], x[i], y[i] = gcp.GCPPixel, gcp.GCPLine, gcp.GCPX, gcp.GCPY
-        
+
         # Convert GCP coordinates to another projection if needed
         if epsg_out != gcp_epsg:
             x, y = transform_coordinates(x, y, gcp_epsg, epsg_out)
@@ -792,7 +792,7 @@ class RasterInfo:
         """
         # Convert coordinate to image coordinate
         row, col = self.xy_to_imagecoord(x, y)
-        
+
         # Check bounds
         if row < 0 or row > (self.ny - 1):
             return False
@@ -1013,7 +1013,7 @@ def interpolate_array(array, hdr, x, y, ref_hdr=None, order=3):
                              mode='constant', cval=np.nan)
 
     # Recover original shape and return
-    return values.reshape(x.shape) 
+    return values.reshape(x.shape)
 
 def warp(raster, target_epsg=None, target_hdr=None, target_dims=None, order=3, n_proc=1):
     """
@@ -1055,7 +1055,7 @@ def warp(raster, target_epsg=None, target_hdr=None, target_dims=None, order=3, n
 
     # If only EPSG code is provided, compute target grid
     if target_hdr is None:
-    
+
         # Convert bounding coordinates from source to target projection
         src_xmin, src_xmax = raster.hdr.xlim
         src_ymin, src_ymax = raster.hdr.ylim
@@ -1073,7 +1073,7 @@ def warp(raster, target_epsg=None, target_hdr=None, target_dims=None, order=3, n
             out_ny, out_nx = target_dims
         else:
             out_ny, out_nx = raster.hdr.ny, raster.hdr.nx
-        
+
         # Construct meshgrid with same dimensions (may be a bad idea in polar regions)
         xarr = np.linspace(trg_xmin, trg_xmax, out_nx)
         yarr = np.linspace(trg_ymax, trg_ymin, out_ny)
@@ -1086,16 +1086,32 @@ def warp(raster, target_epsg=None, target_hdr=None, target_dims=None, order=3, n
     else:
         trg_x, trg_y = target_hdr.meshgrid()
 
-    # Perform transformation on chunks in parallel
-    import pymp
-    data_warped = pymp.shared.array(trg_y.shape, dtype=raster.data.dtype)
+    # Chunk geometry
     chunks = get_chunks(trg_x.shape, 128, 128)
     n_chunks = len(chunks)
 
-    # Loop over chunks
-    with pymp.Parallel(n_proc) as manager:
-        for k in manager.range(n_chunks):
+    # Perform transformation on chunks in parallel
+    if n_proc > 1:
+        import pymp
+        data_warped = pymp.shared.array(trg_y.shape, dtype=raster.data.dtype)
 
+        # Loop over chunks
+        with pymp.Parallel(n_proc) as manager:
+            for k in manager.range(n_chunks):
+
+                # Convert target coordinates to source coordinates
+                islice, jslice = chunks[k]
+                src_x, src_y = pyproj.transform(trg_proj, src_proj,
+                                                trg_x[islice, jslice],
+                                                trg_y[islice, jslice],
+                                                always_xy=True)
+
+                # Interpolate source raster
+                data_warped[islice, jslice] = interpolate_raster(raster, src_x, src_y, order=order)
+
+    else:
+        data_warped = np.zeros(trg_y.shape, dtype=raster.data.dtype)
+        for k in range(n_chunks):
             # Convert target coordinates to source coordinates
             islice, jslice = chunks[k]
             src_x, src_y = pyproj.transform(trg_proj, src_proj,
@@ -1225,7 +1241,7 @@ def render_kml(raster, filename, dpi=300, cmap='viridis', clim=None, n_proc=1):
     fig, ax = plt.subplots(figsize=(11,7))
     im = ax.imshow(raster.data, cmap=cmap, clim=clim)
     ax.axis('off')
-    
+
     # Save to PNG
     froot = filename.split('.')[0]
     pngfile = froot + '.png'
@@ -1345,7 +1361,7 @@ def load_ann(filename, comment=';'):
             ind_comment = value_str.find(comment)
             if ind_comment > -1:
                 value_str = value_str[:ind_comment].strip()
-            
+
             # Store in dictionary
             ann[key] = value_str
 
