@@ -550,8 +550,12 @@ class RasterInfo:
         with h5py.File(stackfile, 'r') as fid:
             
             # Load coordinates
-            X = fid['x'][()]
-            Y = fid['y'][()]
+            try:
+                X = fid['x'][()]
+                Y = fid['y'][()]
+            except KeyError:
+                X = fid['X'][()]
+                Y = fid['Y'][()]
 
             # Extract 1D
             if X.ndim == 2:
