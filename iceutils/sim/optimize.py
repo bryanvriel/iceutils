@@ -10,8 +10,7 @@ except ImportError:
 from scipy import optimize
 import sys
 
-def find_root(profile, model, method='newton', n_iter=500, tol=1.0e-5, scale=1.0e-2,
-              options=None):
+def find_root(profile, model, method='newton', n_iter=500, tol=1.0e-5, options=None):
     """
     Wrapper for various root-finding optimization algorithms. For any method other than 'newton',
     it calls scipy.optimize.root.
@@ -29,8 +28,6 @@ def find_root(profile, model, method='newton', n_iter=500, tol=1.0e-5, scale=1.0
         Number of interations: Default: 500.
     tol: float, optional
         Tolerence for optimization. Default: 1.0e-5.
-    scale: float, optional
-        Value for scaling PDE residuals. Default: 1.0e-2.
     options: dict, optional
         Options dict for scipy.optimize.root.
 
@@ -42,8 +39,7 @@ def find_root(profile, model, method='newton', n_iter=500, tol=1.0e-5, scale=1.0
         PDE residual values.
     """
     if method == 'newton':
-        U, F = _find_root_newton(profile, model, n_iter=n_iter, tol=tol, scale=scale,
-                                 **options)
+        U, F = _find_root_newton(profile, model, n_iter=n_iter, tol=tol, **options)
     else:
         result = optimize.root(model.compute_pde_values, profile.u,
                                jac=model.compute_jacobian, method=method,
@@ -58,7 +54,6 @@ def _find_root_newton(profile,
                       model,
                       n_iter=500,
                       tol=1.0e-5,
-                      scale=1.0e-2,
                       reltol=1.0e-10,
                       delta=0.2,
                       reg_param=1.0e-10,
@@ -77,8 +72,6 @@ def _find_root_newton(profile,
         Number of interations: Default: 500.
     tol: float, optional
         Tolerence for optimization. Default: 1.0e-5.
-    scale: float, optional
-        Value for scaling PDE residuals. Default: 1.0e-2.
     reltol: float, optional
         Relative tolerance (minimum change in residual norm). Default: 1.0e-10.
     delta: float, optional
@@ -106,7 +99,7 @@ def _find_root_newton(profile,
     for i in range(n_iter):
 
         # Compute value of PDE at current point
-        F = model.compute_pde_values(U, scale=scale)
+        F = model.compute_pde_values(U)
         Fmag = np.linalg.norm(F)
 
         # Diagnostics
@@ -121,10 +114,10 @@ def _find_root_newton(profile,
             break
 
         # Compute Jacobian at current point
-        J = model.compute_jacobian(U, scale=scale)
+        J = model.compute_jacobian(U)
 
         # Compute update vector
-        JtJ = np.dot(J.T, J) + regmat
+        JtJ = np.dot(J.T, J) #+ regmat
         JtF = np.dot(J.T, F)
         iJtJ = np.linalg.inv(JtJ)
         dU = np.dot(iJtJ, -1.0*JtF)
