@@ -3,6 +3,7 @@
 import jax.numpy as np
 import matplotlib.pyplot as plt
 from scipy.interpolate import UnivariateSpline, interp1d
+from functools import partial
 import jax
 import sys
 
@@ -28,9 +29,12 @@ class IceStream:
         Sliding law exponent. Default: 3.
     bv_scale: float, optional
         Scale factor for boundary conditions. Default: 500.0.
+    scale: float, optional
+        Scale factor for computing PDE residuals. Default: 0.01.
     """
     
-    def __init__(self, profile, calving_force, A, cb=6.0e2, n=3, m=3, bv_scale=500.0):
+    def __init__(self, profile, calving_force, A, cb=6.0e2, n=3, m=3, bv_scale=500.0,
+                 scale=1.0e-2):
         """
         Initialize IceStream class.
         """
@@ -49,11 +53,8 @@ class IceStream:
 
         # Numerical parameters
         self.boundary_value_scale = bv_scale
-
-        # Epsilon value when computing the effective viscosity
-        # When grid cell size gets smaller, this should also be smaller to ensure stability
-        self.nu_eps = 1.0e-8
-
+        self.scale = scale
+        
         # The force at the calving front
         self.fs = calving_force
 
@@ -65,7 +66,8 @@ class IceStream:
         # Initialize jacobian function
         self.fjac = jax.jacfwd(self.compute_pde_values, 0)
 
-    def compute_pde_values(self, u, scale=1.0e-2, return_components=False):
+    @partial(jax.jit, static_argnums=(0,))
+    def compute_pde_values(self, u):
         """
         Compute vector of PDE residuals for a given velocity profile.
         
@@ -73,21 +75,15 @@ class IceStream:
         ----------
         u: (N,) ndarray
             Array of ice velocity in m/yr.
-        scale: float, optional
-            Value for scaling PDE residuals. Default: 1.0e-2.
-        return_components: bool, optional
-            If True, return individual stress components in a dictionary.
 
         Returns
         ------- 
         F: (N+2,) ndarray
             Array of PDE residuals. Returned if return_components = False.
-        stress_dict: dict
-            Dictionary of individual stress components. Returned if return_components = True.
         """
 
         # Cache some parameters to use here
-        g, n, m, A = [getattr(self, attr) for attr in ('g', 'n', 'm', 'A')]
+        g, n, m, A, scale = [getattr(self, attr) for attr in ('g', 'n', 'm', 'A', 'scale')]
 
         # Cache some variables from the profile
         D, h, alpha, N = [getattr(self.profile, attr) for attr in ('D', 'h', 'alpha', 'N')]
@@ -96,27 +92,21 @@ class IceStream:
         F = np.zeros(N + 2)
 
         # Compute gradient of velocity profile
-        Du = np.dot(D, u)
+        Du = np.dot(D, u) + 1.0e-13 # epsilon to avoid divide-by-zero
 
         # Dynamic viscosity
-        nu = A**(-1 / n) / (np.abs(Du)**((n - 1) / n) + self.nu_eps)
+        nu = A**(-1 / n) / (np.abs(Du)**((n - 1) / n))
 
         # Membrane stresses
         membrane = scale * 2.0 * np.dot(D, h * nu * Du)
 
         # Basal drag
-        absu = np.abs(u)
+        absu = np.abs(u) + 1.0e-13 # epsilon to avoid divide-by-zero
         usign = u / absu
         basal = scale * usign * self.cb * absu**(1.0 / m)
 
         # Driving stress
         Td = scale * self.rho_ice * g * h * alpha
-
-        # Optionally return individual stress components
-        if return_components:
-            return {'membrane': membrane,
-                    'basal': basal,
-                    'driving': Td}
 
         # Compute boundary conditions
         b1 = self.boundary_value_scale * Du[0]
@@ -130,7 +120,8 @@ class IceStream:
         # Done
         return F2
 
-    def compute_jacobian(self, u, scale=1.0e-2):
+    @partial(jax.jit, static_argnums=(0,))
+    def compute_jacobian(self, u):
         """ 
         Compute Jacobian of residual array with respect to a given velocity array.
                     
@@ -138,8 +129,6 @@ class IceStream:
         ----------
         u: (N,) ndarray
             Array of ice velocity in m/yr.
-        scale: float, optional
-            Value for scaling PDE residuals. Default: 1.0e-2.
         
         Returns
         -------
@@ -147,9 +136,53 @@ class IceStream:
             2D Jacobian array.
         """
         # Pass arguments to jacobian function
-        J = self.fjac(u, scale=scale)
+        J = self.fjac(u)
         # Done
         return J
+
+    def compute_stress_components(self, u):
+        """
+        Compute stress components and return in dict.
+        
+        Parameters
+        ----------
+        u: (N,) ndarray
+            Array of ice velocity in m/yr.
+        
+        Returns
+        ------- 
+        stress_dict: dict
+            Dictionary of individual stress components.
+        """
+
+        # Cache some parameters to use here
+        g, n, m, A = [getattr(self, attr) for attr in ('g', 'n', 'm', 'A')]
+
+        # Cache some variables from the profile
+        D, h, alpha, N = [getattr(self.profile, attr) for attr in ('D', 'h', 'alpha', 'N')]
+
+        # Compute gradient of velocity profile
+        Du = np.dot(D, u) + 1.0e-13
+
+        # Dynamic viscosity
+        nu = A**(-1 / n) / (np.abs(Du)**((n - 1) / n))
+
+        # Membrane stresses
+        membrane = 2.0 * np.dot(D, h * nu * Du)
+
+        # Basal drag
+        absu = np.abs(u) + 1.0e-13
+        usign = u / absu
+        basal = usign * self.cb * absu**(1.0 / m)
+
+        # Driving stress
+        Td = self.rho_ice * g * h * alpha
+
+        # Return individual stress components
+        return {'membrane': membrane,
+                'basal': basal,
+                'driving': Td}
+
 
 
 class LateralIceStream:
@@ -176,9 +209,12 @@ class LateralIceStream:
         Sliding law exponent. Default: 3.
     bv_scale: float, optional
         Scale factor for boundary conditions. Default: 500.0.
+    scale: float, optional
+        Scale factor for computing PDE residuals. Default: 0.01.
     """
     
-    def __init__(self, profile, calving_force, A, W=3000.0, mu=1.0, n=3, m=3, bv_scale=500.0):
+    def __init__(self, profile, calving_force, A, W=3000.0, mu=1.0, n=3, m=3, bv_scale=500.0,
+                 scale=1.0e-2):
         """
         Initialize LateralIceStream class.
         """
@@ -197,11 +233,8 @@ class LateralIceStream:
 
         # Numerical parameters
         self.boundary_value_scale = bv_scale
-
-        # Epsilon value when computing the effective viscosity
-        # When grid cell size gets smaller, this should also be smaller to ensure stability
-        self.nu_eps = 1.0e-8
-
+        self.scale = scale
+        
         # The force at the calving front
         self.fs = calving_force
 
@@ -213,7 +246,8 @@ class LateralIceStream:
         # Initialize jacobian function
         self.fjac = jax.jacfwd(self.compute_pde_values, 0)
 
-    def compute_pde_values(self, u, scale=1.0e-2, return_components=False):
+    @partial(jax.jit, static_argnums=(0,))
+    def compute_pde_values(self, u):
         """
         Parameters
         ----------
@@ -233,9 +267,9 @@ class LateralIceStream:
         """
 
         # Cache some parameters to use here
-        g, n, m, W, A, mu = [
+        g, n, m, W, A, mu, scale = [
             getattr(self, attr) for attr in 
-            ('g', 'n', 'm', 'W', 'A', 'mu')
+            ('g', 'n', 'm', 'W', 'A', 'mu', 'scale')
         ]
 
         # Cache some variables from the profile
@@ -248,31 +282,26 @@ class LateralIceStream:
         F = np.zeros(N + 2)
 
         # Compute gradient of velocity profile
-        Du = np.dot(D, u)
+        Du = np.dot(D, u) + 1.0e-13 # epsilon to avoid divide-by-zero
 
         # Dynamic viscosity
-        nu = A**(-1 / n) / (np.abs(Du)**((n - 1) / n) + self.nu_eps)
+        nu = A**(-1 / n) / (np.abs(Du)**((n - 1) / n))
 
         # Membrane stresses
         membrane = scale * 2.0 * np.dot(D, h * nu * Du)
 
         # Basal drag
-        absu = np.abs(u)
+        absu = np.abs(u) + 1.0e-13 # epsilon to avoid divide-by-zero
         usign = u / absu
-        basal_drag = scale * usign * mu * (self.Hf * absu)**(1 / m)
+        #basal_drag = scale * usign * mu * (self.Hf * absu)**(1 / m)
+        basal_drag = scale * usign * mu * absu**(1.0 / m)
 
         # Lateral drag
         lateral_drag = scale * 2 * usign * h / W * (5 * absu / (A * W))**(1 / n)
 
         # Driving stress
         Td = scale * self.rho_ice * g * h * alpha
-
-        # At this point, return individual components if requested
-        if return_components:
-            cdict = {'membrane': membrane, 'basal': basal_drag,
-                     'lateral': lateral_drag, 'driving': Td}
-            return cdict
-
+        
         # Compute boundary conditions
         b1 = self.boundary_value_scale * Du[0]
         b2 = self.boundary_value_scale * (Du[-1] - self.fs)
@@ -284,8 +313,9 @@ class LateralIceStream:
 
         # Done
         return F2
-        
-    def compute_jacobian(self, u, scale=1.0e-2):
+       
+    @partial(jax.jit, static_argnums=(0,)) 
+    def compute_jacobian(self, u):
         """
         Compute Jacobian of residual array with respect to a given velocity array.
         
@@ -302,9 +332,61 @@ class LateralIceStream:
             2D Jacobian array.
         """
         # Pass arguments to jacobian function
-        J = self.fjac(u, scale=scale)
+        J = self.fjac(u)
         # Done
         return J
+
+    def compute_stress_components(self, u):
+        """
+        Compute stress components and return in dict.
+        
+        Parameters
+        ----------
+        u: (N,) ndarray
+            Array of ice velocity in m/yr.
+        
+        Returns
+        ------- 
+        stress_dict: dict
+            Dictionary of individual stress components.
+        """
+        # Cache some parameters to use here
+        g, n, m, W, A, mu, scale = [
+            getattr(self, attr) for attr in 
+            ('g', 'n', 'm', 'W', 'A', 'mu', 'scale')
+        ]
+
+        # Cache some variables from the profile
+        D, h, depth, alpha, rho_ice, rho_water, N = [
+            getattr(self.profile, attr) for attr in 
+            ('D', 'h', 'depth', 'alpha', 'rho_ice', 'rho_water', 'N')
+        ]
+    
+        # Compute gradient of velocity profile
+        Du = np.dot(D, u) + 1.0e-13 # epsilon to avoid divide-by-zero
+
+        # Dynamic viscosity
+        nu = A**(-1 / n) / (np.abs(Du)**((n - 1) / n))
+
+        # Membrane stresses
+        membrane = scale * 2.0 * np.dot(D, h * nu * Du)
+
+        # Basal drag
+        absu = np.abs(u) + 1.0e-13 # epsilon to avoid divide-by-zero
+        usign = u / absu
+        #basal_drag = scale * usign * mu * (self.Hf * absu)**(1 / m)
+        basal_drag = scale * usign * mu * absu**(1.0 / m)
+
+        # Lateral drag
+        lateral_drag = scale * 2 * usign * h / W * (5 * absu / (A * W))**(1 / n)
+
+        # Driving stress
+        Td = scale * self.rho_ice * g * h * alpha
+
+        # Return individual components in dictionary
+        cdict = {'membrane': membrane, 'basal': basal_drag,
+                 'lateral': lateral_drag, 'driving': Td}
+        return cdict
 
 
 # end of file
