@@ -418,17 +418,26 @@ def h5read(filename, dataset):
     ----------
     filename: str
         Filename of HDF5 file to read from.
-    dataset: str
-        H5 path for dataset.
+    dataset: str or list of str
+        H5 path for dataset(s) to read.
 
     Returns
     -------
-    data: ndarray
-        Array for data.
+    data: ndarray or list of ndarray
+        Array(s) for data.
     """
-    with h5py.File(filename, 'r') as fid:
-        data = fid[dataset][()]
-    return data
+    if isinstance(dataset, str):
+        with h5py.File(filename, 'r') as fid:
+            data = fid[dataset][()]
+        return data
+    elif isinstance(dataset, (list, tuple)):
+        data = []
+        with h5py.File(filename, 'r') as fid:
+            for key in dataset:
+                data.append(fid[key][()])
+        return data
+    else:
+        raise ValueError('Must provide dataset as str or list of str')
 
 
 # end of file
