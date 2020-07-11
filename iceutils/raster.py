@@ -1206,6 +1206,66 @@ def write_array_as_raster(array, hdr, filename, epsg=None, dtype=None):
     # Write
     raster.write_gdal(filename, epsg=epsg, dtype=dtype)
 
+def griddata(x, y, z, dx, dy, x_extent=None, y_extent=None, method='linear', epsg=None):
+    """
+    Utility function to create a 2D array for scattered data. Calls griddata from
+    scipy.interpolate.
+
+    Parameters
+    ----------
+    x: ndarray
+        Array of x-coordinates.
+    y: ndarray
+        Array of y-coordinates.
+    z: ndarray
+        Array of data values.
+    dx: float
+        Spacing of output grid in x-direction.
+    dy: float
+        Spacing of output grid in y-direction.
+    x_extent: list, optional
+        [x_min, x_max] bounds of output grid. Default computed from data.
+    y_extent: list, optional
+        [y_min, y_max] bounds of output grid. Default computed from data.
+    method: str, optional
+        Interpolation method passed to scipy.interpolate.griddata. Default: 'linear'.
+    epsg: int, optional
+        EPSG of output raster. Default: None.
+
+    Returns
+    -------
+    raster: Raster
+        Output raster object.
+    """
+    from scipy.interpolate import griddata
+
+    # Define the output grid
+    if x_extent is not None:
+        x_min, x_max = np.min(x), np.max(x)
+    else:
+        x_min, x_max = x_extent
+
+    if y_extent is not None:
+        y_min, y_max = np.min(y), np.max(y)
+    else:
+        y_min, y_max = y_extent
+
+    Nx = int((x_max - x_min) / dx) + 1
+    Ny = int((y_max - y_min) / dy) + 1
+    xg = x_min + dx * np.arange(Nx)
+    yg = y_min + dy * np.arange(Ny)
+    Xg, Yg = np.meshgrid(xg, yg)
+
+    # Call griddata
+    pts = np.column_stack((x, y))
+    Zg = griddata(pts, z, (Xg, Yg), method=method)
+    
+    # Wrap in raster
+    hdr = ice.RasterInfo(Xg=Xg, Yg=Yg, epsg=epsg)
+    raster = ice.Raster(data=Zg, hdr=hdr)
+
+    return raster
+
 def render_kml(raster, filename, dpi=300, cmap='viridis', clim=None, n_proc=1):
     """
     Renders Raster data to an image and creates a KML for viewing in Google Earth.
