@@ -1251,9 +1251,9 @@ def griddata(x, y, z, dx, dy, x_extent=None, y_extent=None, method='linear', eps
         y_min, y_max = y_extent
 
     Nx = int((x_max - x_min) / dx) + 1
-    Ny = int((y_max - y_min) / dy) + 1
+    Ny = int((y_max - y_min) / abs(dy)) + 1
     xg = x_min + dx * np.arange(Nx)
-    yg = y_min + dy * np.arange(Ny)
+    yg = y_max + dy * np.arange(Ny)
     Xg, Yg = np.meshgrid(xg, yg)
 
     # Call griddata
