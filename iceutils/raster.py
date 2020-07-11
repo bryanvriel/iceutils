@@ -1261,7 +1261,7 @@ def griddata(x, y, z, dx, dy, x_extent=None, y_extent=None, method='linear', eps
     Zg = griddata(pts, z, (Xg, Yg), method=method)
     
     # Wrap in raster
-    hdr = RasterInfo(Xg=Xg, Yg=Yg, epsg=epsg)
+    hdr = RasterInfo(X=Xg, Y=Yg, epsg=epsg)
     raster = Raster(data=Zg, hdr=hdr)
 
     return raster
