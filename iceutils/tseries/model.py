@@ -35,6 +35,10 @@ class Model:
             self.collection = timefn.TimefnCollection()
             self.collection.append(timefn.fnmap['poly'](t[0], order=1, units='years'))
 
+        # Save the time array
+        self.t = t
+        self.tdec = np.array([datestr2tdec(pydtime=date) for date in t])
+
         # Evaluate the collection
         self.G = self.collection(t)
 
