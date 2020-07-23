@@ -4,7 +4,7 @@ import numpy as np
 from scipy.optimize import minimize
 import scipy.ndimage as ndimage
 import cv2 as cv
-import pymp
+#import pymp
 import sys
 import os
 
