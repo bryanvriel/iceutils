@@ -75,7 +75,8 @@ class Raster:
     jslice: slice, optional
         Slice object specifying image columns to subset.
     projWin: list, optional
-        List of [x_max, y_max, x_min, y_min] for geographic bounding box to subset.
+        List of [upper_left_x, upper_left_y, lower_right_x, lower_right_y] for geographic
+        bounding box to subset.
     """
 
     def __init__(self,
@@ -485,7 +486,8 @@ class RasterInfo:
         rasterfile: str
             Filename for GDAL-compatible raster to read.
         projWin: list, optional
-            List of [x_max, y_max, x_min, y_min] for geographic bounding box to subset.
+            List of [upper_left_x, upper_left_y, lower_right_x, lower_right_y] for
+            geographic bounding box to subset.
         islice: slice, optional
             Slice object specifying image rows to subset.
         jslice: slice, optional
@@ -594,7 +596,8 @@ class RasterInfo:
         Parameters
         ----------
         projWin: list
-            List of [x_max, y_max, x_min, y_min] for geographic bounding box to subset.
+            List of [upper_left_x, upper_left_y, lower_right_x, lower_right_y] for
+            geographic bounding box to subset.
         islice: slice, optional
             Slice object specifying image rows to subset.
         jslice: slice, optional
@@ -864,6 +867,14 @@ class RasterInfo:
         Return matplotlib-compatible extent of (left, right, bottom, top).
         """
         return np.array([self.xstart, self.xstop, self.ystop, self.ystart])
+
+    @property
+    def projWin(self):
+        """
+        Return GDAL-style projection window of:
+        [upper_left_x, upper_left_y, lower_right_x, lower_right_y].
+        """
+        return np.array([self.xstart, self.ystart, self.xstop, self.ystop])
 
     @property
     def xlim(self):
