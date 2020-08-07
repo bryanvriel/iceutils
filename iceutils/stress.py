@@ -3,49 +3,120 @@
 import numpy as np
 import sys
 
-def compute_stress_scalars(vx, vy, dem, dx=100, dy=-100):
+def compute_stress_strain(vx, vy, dx=100, dy=-100, h=None, b=None, AGlen=None,
+                          rho_ice=917.0, g=9.80665, n=3):
     """
-    Compute stress fields.
+    Compute stress and strain fields and return in dictionaries.
     """
-    # Magnitude
-    vmag = np.sqrt(vx**2 + vy**2)
+    # Cache image shape
+    Ny, Nx = vx.shape
 
-    # Compute gradients
-    L11 = np.gradient(1.0e3*vx, dx, axis=1)
-    L12 = np.gradient(1.0e3*vx, dy, axis=0)
-    L21 = np.gradient(1.0e3*vy, dx, axis=1)
-    L22 = np.gradient(1.0e3*vy, dy, axis=0)
-    
+    # Compute velocity gradients
+    L11 = np.gradient(vx, dx, axis=1)
+    L12 = np.gradient(vx, dy, axis=0)
+    L21 = np.gradient(vy, dx, axis=1)
+    L22 = np.gradient(vy, dy, axis=0)
+
     # Compute components of strain-rate tensor
-    D11 = 0.5 * (L11 + L11)
-    D12 = 0.5 * (L12 + L21)
-    D21 = 0.5 * (L21 + L12)
-    D22 = 0.5 * (L22 + L22)
+    D = np.empty((2, 2, vx.size))
+    D[0, 0, :] = 0.5 * (L11 + L11).ravel()
+    D[0, 1, :] = 0.5 * (L12 + L21).ravel()
+    D[1, 0, :] = 0.5 * (L21 + L12).ravel()
+    D[1, 1, :] = 0.5 * (L22 + L22).ravel()
 
-    # Compute  components of rotation-rate tensor
-    #W12 = 0.5 * (L12 - L21)
-    #W21 = 0.5 * (L21 - L12)
-    #rotation = np.sqrt(0.5 * (W12**2 + W21**2))
+    # Compute pixel-dependent rotation tensor
+    R = np.empty((2, 2, vx.size))
+    theta = np.arctan2(vy, vx).ravel()
+    R[0, 0, :] = np.cos(theta)
+    R[0, 1, :] = np.sin(theta)
+    R[1, 0, :] = -np.sin(theta)
+    R[1, 1, :] = np.cos(theta)
 
-    # Gradients for computing elevation change (want in units of meters per year)
-    hL11 = np.gradient(dem * (1.0e3 * vx), dx, axis=1)
-    hL22 = np.gradient(dem * (1.0e3 * vy), dy, axis=0)
+    # Apply rotation tensor
+    D = np.einsum('ijm,kjm->ikm', D, R)
+    D = np.einsum('ijm,jkm->ikm', R, D)
 
-    # Compute elevation change (in meters per year)
-    dhdt = hL11 + hL22
+    # Cache elements of rotated strain-rate tensor for easier viewing
+    D11 = D[0, 0, :]
+    D12 = D[0, 1, :]
+    D21 = D[1, 0, :]
+    D22 = D[1, 1, :]
+
+    # Along-flow normal strain-rate
+    exx = D11.reshape(Ny, Nx)
+
+    # Shear- same result as: e_xy_max = np.sqrt(0.25 * (e_x - e_y)**2 + e_xy**2)
+    trace = D11 + D22
+    det = D11 * D22 - D12 * D21
+    shear = np.sqrt(0.25 * trace**2 - det).reshape(Ny, Nx)
 
     # Compute scalar quantities from stress tensors
-    dilatation = L11 + L22
-    effective_strain = np.sqrt(0.5 * (D11**2 + D12**2 + D21**2 + D22**2))
+    dilatation = (L11 + L22).reshape(Ny, Nx)
+    effective_strain = np.sqrt(0.5 * (D11**2 + D12**2 + D21**2 + D22**2)).reshape(Ny, Nx)
 
-    # Use convention that shear strain is half the difference of eigenvalues of strain-rate tensor
-    # For 2x2 matrix, the eigenvalues are:
-    #   1/2 * Tr(D) +/- sqrt(Tr(D)**2 / 4 - det(D))
-    det = D11 * D22 - D12 * D21
-    shear = 2.0 * np.sqrt(0.25 * dilatation**2 - det)
+    # Store strain components in dictionary
+    strain_dict = {'e_xx': exx,
+                   'e_xy': shear,
+                   'dilatation': dilatation,
+                   'effective': effective_strain}
 
-    # Done
-    return vmag, dhdt, shear, effective_strain
+    # Compute stress components if thickness and bed provided
+    if h is not None:
+
+        # Compute thickness gradients
+        h_x = np.gradient(h, dx, axis=1)
+        h_y = np.gradient(h, dy, axis=0)
+
+        # For surface, add bed if it exists to compute driving stress
+        if b is not None:
+            s = h + b
+            s_x = np.gradient(s, dx, axis=1)
+            s_y = np.gradient(s, dy, axis=0)
+        else:
+            s_x = h_x
+            s_y = h_y
+
+        # Compute AGlen if not provided
+        if AGlen is None:
+            AGlen = ice.sim.AGlen_vs_temp(-10.0)
+
+        # Effective viscosity
+        strain = np.sqrt(L11**2 + L22**2 + 0.25 * (L12 + L21)**2 + L11 * L22)
+        scale_factor = 0.5 * AGlen**(-1 / n)
+        eta = scale_factor * strain**((1.0 - n) / n)
+
+        # Compute PHYSICAL stress tensor comonents
+        txx = 2.0 * eta * L11
+        tyy = 2.0 * eta * L22
+        txy = 2.0 * eta * L12
+        tyx = 2.0 * eta * L21
+
+        # Membrane stresses
+        tmxx = np.gradient(h * (2 * txx + tyy), dx, axis=1)
+        tmxy = np.gradient(h * 0.5 * (txy + tyx), dy, axis=0)
+        tmyy = np.gradient(h * (2 * tyy + txx), dy, axis=0)
+        tmyx = np.gradient(h * 0.5 * (txy + tyx), dx, axis=1)
+
+        # Driving stresses
+        tdx = -1.0 * rho_ice * g * h * s_x
+        tdy = -1.0 * rho_ice * g * h * s_y
+
+        # Pack stress
+        stress_dict = {'txx': txx,
+                       'txy': 0.5 * (txy + tyx),
+                       'tyy': tyy,
+                       'tmxx': tmxx,
+                       'tmxy': tmxy,
+                       'tmyy': tmyy,
+                       'tmyx': tmyx,
+                       'tdx': tdx,
+                       'tdy': tdy}
+
+        return strain_dict, stress_dict
+
+    else:
+        return strain_dict
+
 
 def sgolay2d ( z, window_size, order, derivative=None):
     """
@@ -63,9 +134,9 @@ def sgolay2d ( z, window_size, order, derivative=None):
 
     half_size = window_size // 2
 
-    # exponents of the polynomial. 
-    # p(x,y) = a0 + a1*x + a2*y + a3*x^2 + a4*y^2 + a5*x*y + ... 
-    # this line gives a list of two item tuple. Each tuple contains 
+    # exponents of the polynomial.
+    # p(x,y) = a0 + a1*x + a2*y + a3*x^2 + a4*y^2 + a5*x*y + ...
+    # this line gives a list of two item tuple. Each tuple contains
     # the exponents of the k-th term. First element of tuple is for x
     # second element for y.
     # Ex. exps = [(0,0), (1,0), (0,1), (2,0), (1,1), (0,2), ...]
