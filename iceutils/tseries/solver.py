@@ -4,7 +4,6 @@ import numpy as np
 import pickle
 import time as pytime
 from scipy import signal
-import pymp
 import h5py
 import copy
 import sys
@@ -13,6 +12,7 @@ import os
 from ..constants import *
 from ..raster import get_chunks
 from ..stack import Stack
+from .. import pymp
 from .LinearRegression import *
 from .model import build_temporal_model
 
@@ -84,8 +84,9 @@ def inversion(stack, userfile, outdir, cleaned_stack=None,
         npix = data1d.shape[1]
 
         # Transfer to shared arrays
-        data = pymp.shared.array(data1d.shape, dtype=np.float32)
-        wgts = pymp.shared.array(wgts1d.shape, dtype=np.float32)
+        manager = pymp.Manager()
+        data = pymp.array(data1d.shape, dtype=np.float32)
+        wgts = pymp.array(wgts1d.shape, dtype=np.float32)
         data[:, :] = data1d
         wgts[:, :] = wgts1d
 
@@ -93,11 +94,11 @@ def inversion(stack, userfile, outdir, cleaned_stack=None,
         shape = (len(tfit), npix)
         results = {}
         for key in ('full', 'secular', 'seasonal', 'transient', 'sigma'):
-            results[key] = pymp.shared.array(shape, dtype=np.float32)
+            results[key] = pymp.array(shape, dtype=np.float32)
 
         # Loop over pixels in chunk in parallel
-        with pymp.Parallel(n_proc) as manager:
-            for index in manager.range(npix):
+        with pymp.Parallel(n_proc, manager) as parallel:
+            for index in parallel.range(npix):
 
                 # Get pixel data
                 d = data[:, index]
@@ -191,14 +192,15 @@ def inversion_points(stack, userfile, x, y, solver_type='lsqr',
                            n_nonzero_coefs=n_nonzero_coefs, n_min=n_min)
     
     # Create shared arrays for results
+    manager = pymp.Manager()
     shape = (n_pts, len(tfit))
     results = {'tdec': tfit}
     for key in ('full', 'secular', 'seasonal', 'transient', 'sigma'):
-        results[key] = pymp.shared.array(shape, dtype=np.float32)
+        results[key] = pymp.array(shape, dtype=np.float32)
 
     # Loop over pixels in chunk in parallel
-    with pymp.Parallel(n_proc) as manager:
-        for index in manager.range(n_pts):
+    with pymp.Parallel(n_proc, manager) as parallel:
+        for index in parallel.range(n_pts):
 
             # Get time series
             d = stack.timeseries(xy=(x[index], y[index]))
@@ -247,14 +249,15 @@ def butterworth(stack, a, b, fname_long, fname_short, n_proc=1):
         npix = chunk_ny * chunk_nx
 
         # Create shared arrays for results
+        manager = pymp.Manager()
         shape = (stack.Nt, chunk_ny, chunk_nx)
         results = {}
         for key in ('long_term', 'short_term'):
-            results[key] = pymp.shared.array(shape, dtype=np.float32)
+            results[key] = pymp.array(shape, dtype=np.float32)
 
         # Loop over pixels in chunk in parallel
-        with pymp.Parallel(n_proc) as manager:
-            for index in manager.range(npix):
+        with pymp.Parallel(n_proc, manager) as parallel:
+            for index in parallel.range(npix):
 
                 # Get time series
                 i, j = np.unravel_index(index, (chunk_ny, chunk_nx))
