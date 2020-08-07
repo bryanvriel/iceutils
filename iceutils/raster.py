@@ -1103,12 +1103,14 @@ def warp(raster, target_epsg=None, target_hdr=None, target_dims=None, order=3, n
 
     # Perform transformation on chunks in parallel
     if n_proc > 1:
-        import pymp
-        data_warped = pymp.shared.array(trg_y.shape, dtype=raster.data.dtype)
+        from . import pymp
+
+        manager = pymp.Manager()
+        data_warped = pymp.array(trg_y.shape, dtype=raster.data.dtype)
 
         # Loop over chunks
-        with pymp.Parallel(n_proc) as manager:
-            for k in manager.range(n_chunks):
+        with pymp.Parallel(n_proc, manager) as parallel:
+            for k in parallel.range(n_chunks):
 
                 # Convert target coordinates to source coordinates
                 islice, jslice = chunks[k]

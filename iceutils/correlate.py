@@ -4,11 +4,11 @@ import numpy as np
 from scipy.optimize import minimize
 import scipy.ndimage as ndimage
 import cv2 as cv
-import pymp
 import sys
 import os
 
 from .raster import Raster, RasterInfo
+from . import pymp
 
 def offset_map(master_raster, slave_raster, win_x=64, win_y=64, search=20, margin=50,
                skip_x=32, skip_y=32, coarse=False, coarse_over=False, dft=False,
@@ -86,9 +86,10 @@ def offset_map(master_raster, slave_raster, win_x=64, win_y=64, search=20, margi
     out_hdr = RasterInfo(X=X_out, Y=Y_out)
 
     # Allocate arrays for results
-    aoff = pymp.shared.array((chip_rows, chip_cols), dtype='f')
-    roff = pymp.shared.array((chip_rows, chip_cols), dtype='f')
-    snr = pymp.shared.array((chip_rows, chip_cols), dtype='f')
+    manager = pymp.Manager()
+    aoff = pymp.array((chip_rows, chip_cols), dtype='f')
+    roff = pymp.array((chip_rows, chip_cols), dtype='f')
+    snr = pymp.array((chip_rows, chip_cols), dtype='f')
     print('Output grid shape:', aoff.shape)
 
     # Create correlator objects
@@ -100,8 +101,8 @@ def offset_map(master_raster, slave_raster, win_x=64, win_y=64, search=20, margi
             fine_matcher = PhaseRampCorrelator(win_y, win_x)
 
     # Process chips in parallel
-    with pymp.Parallel(n_proc) as manager:
-        for k in manager.range(n_chips):
+    with pymp.Parallel(n_proc, manager) as parallel:
+        for k in parallel.range(n_chips):
 
             # Global index for chip center
             i = i_grid[k]

@@ -24,6 +24,7 @@ except ImportError:
 
 # Other submodules
 from . import sim
+from . import pymp
 
 # Site-dependent modules
 from . import jakobshavn
