@@ -402,3 +402,20 @@ def array(shape, dtype=_np.float64, autolock=False):
     return data
 
 
+def zeros(shape, dtype=_np.float64, autolock=False):
+    """
+    Convenience method for creating a shared array with values initialized to zero.
+    """
+    arr = array(shape, dtype=dtype, autolock=autolock)
+    arr[:] = 0.0
+    return arr
+
+def full(shape, val, dtype=_np.float64, autolock=False):
+    """
+    Convenience method for creating a shared array with values initialized to
+    a specified constant value.
+    """
+    arr = array(shape, dtype=dtype, autolock=autolock)
+    arr[:] = val
+    return arr
+
