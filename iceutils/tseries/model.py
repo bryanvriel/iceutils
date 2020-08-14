@@ -230,7 +230,87 @@ def predict(stack_list, time_index, name='recon', islice=None, jslice=None):
     return fit
 
 
-def build_temporal_model(t, userfile, cov=False):
+def build_temporal_model(t, poly=1, periods=[0.5, 1.0], isplines=[32, 16, 8, 4],
+                         bsplines=None, userfile=None):
+    """
+    Convenience function to build a temporal model from commonly-used pieces. Can alternatively
+    build the model by reading in relevant code from an external file.
+
+    Parameters
+    ----------
+    t: (N,) array
+        Array of datetime or decimal years corresponding to time epochs.
+    poly: int, optional
+        Order of polynomial to include. Default: 1.
+    periods: list, optional
+        Periods (in years) of sinusoidal components to include. Default: [0.5, 1.0].
+    isplines: list, optional
+        I-splines to include. Default: [32, 16, 8, 4].
+    bsplines: list, optional
+        B-splines to include. Default: None.
+    userfile: str, optional
+        External file to read model code from. Default: None.
+
+    Returns
+    -------
+    model: ice.tseries.Model
+        Temporal model.
+    """
+    from . import timefn
+
+    # If external file provided, go ahead and call that function
+    if userfile is not None:
+        model = build_temporal_model_fromfile(t, userfile, cov=False)
+        return model
+
+    # If decimal times passed in, convert to dates
+    if isinstance(t[0], (float, np.float32)):
+        dates = tdec2datestr(t, returndate=True)
+    elif isinstance(t[0], (datetime.datetime, datetime.date)):
+        dates = t
+    else:
+        raise ValueError('Incompatible array of times.')
+
+    # Get time bounds
+    tstart, tend = dates[0], dates[-1]
+    tdec_start = datestr2tdec(pydtime=tstart)
+    tdec_end = datestr2tdec(pydtime=tend)
+
+    # Initalize a collection and relevant basis functions
+    collection = timefn.TimefnCollection()
+    periodic = timefn.fnmap['periodic']
+    ispline = timefn.fnmap['isplineset']
+    bspline = timefn.fnmap['bsplineset']
+    polyfn = timefn.fnmap['poly']
+
+    # Polynomial first
+    collection.append(polyfn(tref=tstart, order=poly, units='years'))
+
+    # Seasonal terms
+    periods = periods or []
+    for period in periods:
+        collection.append(periodic(tref=tstart, units='years', period=period,
+                                   tmin=tstart, tmax=tend))
+
+    # B-splines
+    bsplines = bsplines or []
+    for nspl in bsplines:
+        collection.append(bspline(order=3, num=nspl, units='years',
+                                  tmin=tstart, tmax=tend))
+
+    # Integrated B-splines
+    isplines = isplines or []
+    for nspl in isplines:
+        collection.append(ispline(order=3, num=nspl, units='years',
+                                  tmin=tstart, tmax=tend))
+
+    # Build temporal model
+    model = Model(dates, collection=collection)
+
+    return model
+
+
+def build_temporal_model_fromfile(t, userfile, cov=False):
 
     from importlib.machinery import SourceFileLoader
 
@@ -263,43 +343,6 @@ def build_temporal_design_matrix(t, userfile):
     # Create a model for handling the time function
     model = build_temporal_model(dates, userfile)
     return model.G
-
-
-def build_seasonal_matrix(t):
-
-    from . import timefn
-
-    # If decimal times passed in, convert to dates
-    if isinstance(t[0], (float, np.float32)):
-        dates = tdec2datestr(t, returndate=True)
-    elif isinstance(t[0], (datetime.datetime, datetime.date)):
-        dates = t
-    else:
-        raise ValueError('Incompatible array of times.')
-
-    # Get time bounds
-    tstart, tend = dates[0], dates[-1]
-    tdec_start = datestr2tdec(pydtime=tstart)
-    tdec_end = datestr2tdec(pydtime=tend)
-
-    # Initalize a collection and relevant basis functions
-    collection = timefn.TimefnCollection()
-    periodic = timefn.fnmap['periodic']
-    poly = timefn.fnmap['poly']
-
-    # Polynomial first
-    collection.append(poly(tref=tstart, order=0, units='years'))
-
-    # Seasonal terms
-    collection.append(periodic(tref=tstart, units='years', period=0.5,
-        tmin=tstart, tmax=tend))
-    collection.append(periodic(tref=tstart, units='years', period=1.0,
-        tmin=tstart, tmax=tend))
-
-    # Evaluate collection
-    G = collection(dates)
-
-    return G
 
 
 def get_model_component_indices(collection):
