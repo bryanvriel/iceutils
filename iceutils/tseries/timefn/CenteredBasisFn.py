@@ -63,7 +63,7 @@ class CenteredBasisFn(BasisFn):
 
         #####Convert to SI units 
         try:
-            self.norm = float(ureg[units].to_base_units().magnitude)
+            self.norm = float(ureg.parse_expression(units).to_base_units().magnitude)
         except:
             raise ValueError('Undefined units {0} provided. Cannot convert to SI units'.format(units))
 
