@@ -86,7 +86,7 @@ class SplineFactory(TimefnCollection, BasisFn):
         scale = (knots[1] - knots[0]).total_seconds()
 
         ####Convert scale to same units as requested by user
-        scale_units = (scale*ureg['secs']).to(units).magnitude
+        scale_units = (scale*ureg.parse_expression('secs')).to(units).magnitude
 
         for knot in knots:
             fn = self.baseClass(tref=knot, order=order,
