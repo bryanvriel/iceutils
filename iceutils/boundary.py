@@ -40,9 +40,17 @@ class Boundary:
         """
         Check if point resides within boundary.
         """
-        points = np.column_stack((x, y))
+        # Optional cast to 1d
+        if x.ndim > 1:
+            points = np.column_stack((x.ravel(), y.ravel()))
+        else:
+            points = np.column_stack((x, y))
+
+        # Check if within boundary
         flags = self.path.contains_points(points)
-        return flags
+
+        # Return mask reshaped to original shapes
+        return flags.reshape(x.shape)
 
     def _init_path(self):
         """
