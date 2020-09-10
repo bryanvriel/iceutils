@@ -1,6 +1,7 @@
 #-*- coding: utf-8 -*-
 
 import numpy as np
+import datetime
 import h5py
 
 from ..timeutils import tdec2datestr, datestr2tdec
@@ -231,7 +232,7 @@ def predict(stack_list, time_index, name='recon', islice=None, jslice=None):
 
 
 def build_temporal_model(t, poly=1, periods=[0.5, 1.0], isplines=[32, 16, 8, 4],
-                         bsplines=None, userfile=None):
+                         bsplines=None, seasonal_bspline_sep=None, userfile=None):
     """
     Convenience function to build a temporal model from commonly-used pieces. Can alternatively
     build the model by reading in relevant code from an external file.
@@ -248,6 +249,8 @@ def build_temporal_model(t, poly=1, periods=[0.5, 1.0], isplines=[32, 16, 8, 4],
         I-splines to include. Default: [32, 16, 8, 4].
     bsplines: list, optional
         B-splines to include. Default: None.
+    seasonal_bspline_sep: float, optional
+        Specification of spacing (in years) for B-splines for repeating signals.
     userfile: str, optional
         External file to read model code from. Default: None.
 
@@ -281,6 +284,7 @@ def build_temporal_model(t, poly=1, periods=[0.5, 1.0], isplines=[32, 16, 8, 4],
     periodic = timefn.fnmap['periodic']
     ispline = timefn.fnmap['isplineset']
     bspline = timefn.fnmap['bsplineset']
+    single_bspl = timefn.fnmap['bspline']
     polyfn = timefn.fnmap['poly']
 
     # Polynomial first
@@ -297,6 +301,15 @@ def build_temporal_model(t, poly=1, periods=[0.5, 1.0], isplines=[32, 16, 8, 4],
     for nspl in bsplines:
         collection.append(bspline(order=3, num=nspl, units='years',
                                   tmin=tstart, tmax=tend))
+
+    # Seasonal B-splines
+    if seasonal_bspline_sep is not None:
+        Δtdec = seasonal_bspline_sep
+        Δt = datetime.timedelta(days=int(Δtdec*365))
+        t_current = tstart
+        while t_current <= tend:
+            collection.append(single_bspl(order=3, scale=Δtdec, units='years', tref=t_current))
+            t_current += Δt
 
     # Integrated B-splines
     isplines = isplines or []

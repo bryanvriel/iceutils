@@ -8,6 +8,7 @@ except ImportError:
 
 # Other packages
 from scipy import optimize
+import scipy.linalg as sla
 import sys
 
 def find_root(profile, model, method='newton', n_iter=500, tol=1.0e-5, options=None):
@@ -57,7 +58,7 @@ def _find_root_newton(profile,
                       reltol=1.0e-10,
                       delta=0.2,
                       reg_param=1.0e-10,
-                      verbose=True):
+                      disp=50):
     """
     Implements Newton's method for finding the roots of a multivariate function. Function
     is provided by model.compute_pde_values().
@@ -78,8 +79,8 @@ def _find_root_newton(profile,
         Learning rate for Newton iterations. Default: 0.2
     reg_param: float, optional
         Regularization parameter for computing Hessian matrix. Default: 1.0e-10.
-    verbose: bool, optional
-        Print out iteration progress. Default: False.
+    disp: int, optional
+        Skip number of lines to print diagnostics. If None, nothing is printed to screen.
 
     Returns
     -------
@@ -93,7 +94,8 @@ def _find_root_newton(profile,
     F_prev = model.compute_pde_values(U)
 
     # Damping matrix
-    regmat = reg_param * np.eye(U.size)
+    #regmat = reg_param * np.eye(U.size)
+    #import matplotlib.pyplot as plt
 
     # Begin iterations
     for i in range(n_iter):
@@ -103,7 +105,7 @@ def _find_root_newton(profile,
         Fmag = np.linalg.norm(F)
 
         # Diagnostics
-        if i % 50 == 0 and verbose:
+        if disp is not None and i % disp == 0:
             print('Iteration %03d error: %8.5e' % (i, Fmag))
 
         # Check convergence
@@ -119,9 +121,16 @@ def _find_root_newton(profile,
         # Compute update vector
         JtJ = np.dot(J.T, J) #+ regmat
         JtF = np.dot(J.T, F)
+
         iJtJ = np.linalg.inv(JtJ)
         dU = np.dot(iJtJ, -1.0*JtF)
-        
+
+        #Am = 0.5 * (JtJ + JtJ.T)
+        #c, low = sla.cho_factor(Am)
+        #dU = sla.cho_solver((c, low), -1.0*JtF)
+
+        #dU = sla.lstsq(JtJ, -1.0*JtF)[0]
+
         # Update velocities
         U += delta * dU
         F_prev = F
