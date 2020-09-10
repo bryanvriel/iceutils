@@ -5,7 +5,7 @@ import numpy as np
 import h5py
 import sys
 
-from .raster import RasterInfo
+from .raster import Raster, RasterInfo
 from .timeutils import datestr2tdec
 
 class Stack:
@@ -123,14 +123,21 @@ class Stack:
 
         return
 
-    def slice(self, index, key='data'):
+    def slice(self, index, key='data', as_raster=False):
         """
         Extract Stack 2d slice at given time index.
         """
+        # Extract the data slice
         if self.fmt == 'NHW':
-            return self._datasets[key][index, :, :]
+            data = self._datasets[key][index, :, :]
         elif self.fmt == 'HWN':
-            return self._datasets[key][:, :, index]
+            data = self._datasets[key][:, :, index]
+
+        # Optionally wrap as a raster
+        if as_raster:
+            return Raster(data=data, hdr=self.hdr)
+        else:
+            return data
 
     def set_slice(self, index, data, key='data'):
         """
