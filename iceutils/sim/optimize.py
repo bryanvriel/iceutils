@@ -121,16 +121,9 @@ def _find_root_newton(profile,
         # Compute update vector
         JtJ = np.dot(J.T, J) #+ regmat
         JtF = np.dot(J.T, F)
-
         iJtJ = np.linalg.inv(JtJ)
         dU = np.dot(iJtJ, -1.0*JtF)
-
-        #Am = 0.5 * (JtJ + JtJ.T)
-        #c, low = sla.cho_factor(Am)
-        #dU = sla.cho_solver((c, low), -1.0*JtF)
-
-        #dU = sla.lstsq(JtJ, -1.0*JtF)[0]
-
+        
         # Update velocities
         U += delta * dU
         F_prev = F
