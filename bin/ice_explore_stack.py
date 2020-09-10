@@ -88,7 +88,7 @@ def main(args):
             return
 
         # Get cursor coordinates
-        y, x = int(event.ydata), int(event.xdata)
+        y, x = event.ydata, event.xdata
 
         # Print out pixel locaton
         i, j = stack.hdr.xy_to_imagecoord(x, y)
