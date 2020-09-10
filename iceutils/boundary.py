@@ -73,18 +73,18 @@ class Boundary:
         raise ValueError('Cannot set y-points')
 
 
-def smoothe_line(x, y, n=200, s=1.0):
+def smoothe_line(x, y, n=200, s=1.0, scale=1.0):
     """
     Smoothe a horizontal line with a smoothing spline.
     """
     # Uniform grid for x coordinates
-    xgrid = np.linspace(x[0], x[-1], n)
+    xgrid = scale*np.linspace(x[0], x[-1], n)
     # Spline smoothing
-    spline = UnivariateSpline(x, y, s=s)
+    spline = UnivariateSpline(scale*x, scale*y, s=s)
     # Evaluate spline
     ygrid = spline(xgrid)
     # Done
-    return xgrid, ygrid
+    return xgrid/scale, ygrid/scale
 
 def compute_path_length(x, y):
     """
@@ -217,6 +217,100 @@ def transform_coordinates(x_in, y_in, epsg_in=None, epsg_out=None, proj_in=None,
 
     # Perform transformation
     return pyproj.transform(proj_in, proj_out, x_in, y_in, always_xy=True)
+
+def extract_perpendicular_transects(x, y, raster, W=15.0e3, N=100, N_perp=100,
+                                    return_coords=False, return_theta=False):
+    """
+    Traverse a line and extract multiple perpendicular transects from a raster.
+
+    Parameters
+    ----------
+    x: ndarray
+        Array of X-coordinates for center line.
+    y: ndarray
+        Array of Y-coordinates for center line.
+    raster: Raster
+        Input raster to extract transects from.
+    W: float, optional
+        Half-width of perpendicular transects. Default: 15.0e3.
+    N: int, optional
+        Number of perpendicular transects to extract. Default: 100.
+    N_per: int, optional
+        Number of points in each perpendicular transect. Default: 100.
+    return_coords: bool, optional
+        Return coordinates of transect. Default: False.
+    return_theta: bool, optional
+        Return along-transect rotation angle. Default: FAlse
+
+    Returns
+    -------
+    out: (N, N_per) ndarray
+        Output array of transects.
+    coords: (N, N_per, 2) ndarray
+        Coordinates of transects (if return_coords = True).
+    angle: (N,) ndarray
+        Rotation angle along transect (if return_theta = True).
+    """
+    # If number of transects is greater than the number of points in centerline, interpolate
+    s = compute_path_length(x, y)
+    if N > x.size:
+        s_new = np.linspace(s[0], s[-1], N)
+        x_new = np.interp(s_new, s, x)
+        y_new = np.interp(s_new, s, y)
+        s, x, y = s_new, x_new, y_new
+
+    # Pre-compute centerline spacing
+    dx = np.gradient(x, edge_order=2)
+    dy = np.gradient(y, edge_order=2)
+
+    # Interpolate centerline coordinates
+    s_out = np.linspace(s[0], s[-1], N)
+    x, y, dx, dy = [np.interp(s_out, s, arr) for arr in (x, y, dx, dy)]
+
+    # Allocate array for transects
+    out = np.zeros((N, N_perp))
+    if return_coords:
+        coords = np.zeros((N, N_perp, 2))
+    for k in range(N):
+
+        # Get local flowline coordinate and gradients
+        fx = x[k]
+        fy = y[k]
+        dfx = dx[k]
+        dfy = dy[k]
+
+        # Angles
+        theta = np.arctan2(dfy, dfx)
+        theta_rot = theta + 0.5 * np.pi
+        u = np.cos(theta_rot)
+        v = np.sin(theta_rot)
+
+        # Generate endpoints of a perpendicular line
+        xmin = fx - u * W
+        xmax = fx + u * W
+        ymin = fy - v * W
+        ymax = fy + v * W
+        point1 = (xmax, ymax)
+        point2 = (xmin, ymin)
+
+        # Get transects of bed, thickness, and velocity
+        out[k, :], px, py = raster.transect(point1, point2, n=N_perp, return_location=True)
+        if return_coords:
+            coords[k, :, 0] = px
+            coords[k, :, 1] = py
+
+    # Done
+    if return_coords:
+        if return_theta:
+            return out, coords, np.arctan2(dy, dx)
+        else:
+            return out, coords
+        
+    elif return_theta:
+        return out, np.arctan2(dy, dx)
+
+    else:
+        return out
 
 
 # end of file    
