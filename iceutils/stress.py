@@ -4,13 +4,13 @@ import numpy as np
 import sys
 
 def compute_stress_strain(vx, vy, dx=100, dy=-100, h=None, b=None, AGlen=None,
-                          rho_ice=917.0, g=9.80665, n=3):
+                          rho_ice=917.0, g=9.80665, rotate=False, n=3):
     """
     Compute stress and strain fields and return in dictionaries.
     """
     # Cache image shape
     Ny, Nx = vx.shape
-
+ 
     # Compute velocity gradients
     L11 = np.gradient(vx, dx, axis=1)
     L12 = np.gradient(vx, dy, axis=0)
@@ -24,25 +24,26 @@ def compute_stress_strain(vx, vy, dx=100, dy=-100, h=None, b=None, AGlen=None,
     D[1, 0, :] = 0.5 * (L21 + L12).ravel()
     D[1, 1, :] = 0.5 * (L22 + L22).ravel()
 
-    # Compute pixel-dependent rotation tensor
-    R = np.empty((2, 2, vx.size))
-    theta = np.arctan2(vy, vx).ravel()
-    R[0, 0, :] = np.cos(theta)
-    R[0, 1, :] = np.sin(theta)
-    R[1, 0, :] = -np.sin(theta)
-    R[1, 1, :] = np.cos(theta)
+    # Compute pixel-dependent rotation tensor if requested
+    if rotate:
+        R = np.empty((2, 2, vx.size))
+        theta = np.arctan2(vy, vx).ravel()
+        R[0, 0, :] = np.cos(theta)
+        R[0, 1, :] = np.sin(theta)
+        R[1, 0, :] = -np.sin(theta)
+        R[1, 1, :] = np.cos(theta)
 
-    # Apply rotation tensor
-    D = np.einsum('ijm,kjm->ikm', D, R)
-    D = np.einsum('ijm,jkm->ikm', R, D)
+        # Apply rotation tensor
+        D = np.einsum('ijm,kjm->ikm', D, R)
+        D = np.einsum('ijm,jkm->ikm', R, D)
 
-    # Cache elements of rotated strain-rate tensor for easier viewing
+    # Cache elements of strain-rate tensor for easier viewing
     D11 = D[0, 0, :]
     D12 = D[0, 1, :]
     D21 = D[1, 0, :]
     D22 = D[1, 1, :]
 
-    # Along-flow normal strain-rate
+    # Normal strain rates
     exx = D11.reshape(Ny, Nx)
     eyy = D22.reshape(Ny, Nx)
 
@@ -88,10 +89,10 @@ def compute_stress_strain(vx, vy, dx=100, dy=-100, h=None, b=None, AGlen=None,
         eta = scale_factor * strain**((1.0 - n) / n)
 
         # Compute PHYSICAL stress tensor comonents
-        txx = 2.0 * eta * L11
-        tyy = 2.0 * eta * L22
-        txy = 2.0 * eta * L12
-        tyx = 2.0 * eta * L21
+        txx = 2.0 * eta * D11.reshape(Ny, Nx)
+        tyy = 2.0 * eta * D22.reshape(Ny, Nx)
+        txy = 2.0 * eta * D12.reshape(Ny, Nx)
+        tyx = 2.0 * eta * D21.reshape(Ny, Nx)
 
         # Membrane stresses
         tmxx = np.gradient(h * (2 * txx + tyy), dx, axis=1)
@@ -102,6 +103,19 @@ def compute_stress_strain(vx, vy, dx=100, dy=-100, h=None, b=None, AGlen=None,
         # Driving stresses
         tdx = -1.0 * rho_ice * g * h * s_x
         tdy = -1.0 * rho_ice * g * h * s_y
+
+        # Optional rotation of driving stress
+        if rotate:
+
+            # Compute unit vectors
+            vmag = np.sqrt(vx**2 + vy**2)
+            uhat = vx / vmag
+            vhat = vy / vmag
+
+            # Rotate to along-flow, across-flow
+            tdx2 = tdx * uhat + tdy * vhat
+            tdy2 = tdx * (-vhat) + tdy * uhat
+            tdx, tdy = tdx2, tdy2
 
         # Pack stress
         stress_dict = {'txx': txx,
