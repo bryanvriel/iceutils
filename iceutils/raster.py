@@ -1187,7 +1187,7 @@ def warp_with_gcp_splines(raster, gcp_hdr, x=None, y=None, out_hdr=None, order=3
     # Create new Raster
     return Raster(data=out.reshape(x.shape), hdr=out_hdr)
 
-def write_array_as_raster(array, hdr, filename, epsg=None, dtype=None):
+def write_array_as_raster(array, hdr, filename, epsg=None, dtype=None, driver='ENVI'):
     """
     Convenience function to write a NumPy array to a raster file with a given RasterInfo.
 
@@ -1217,7 +1217,7 @@ def write_array_as_raster(array, hdr, filename, epsg=None, dtype=None):
         dtype = np.dtype(array.dtype)
         dtype = numpy_to_gdal_type[dtype.str]
     # Write
-    raster.write_gdal(filename, epsg=epsg, dtype=dtype)
+    raster.write_gdal(filename, epsg=epsg, dtype=dtype, driver=driver)
 
 def griddata(x, y, z, dx, dy, x_extent=None, y_extent=None, method='linear', epsg=None):
     """
