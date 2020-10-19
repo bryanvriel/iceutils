@@ -218,6 +218,46 @@ def transform_coordinates(x_in, y_in, epsg_in=None, epsg_out=None, proj_in=None,
     # Perform transformation
     return pyproj.transform(proj_in, proj_out, x_in, y_in, always_xy=True)
 
+def transform_projwin(projWin, epsg_in=None, epsg_out=None, proj_in=None, proj_out=None):
+    """
+    Transforms projection window from one projection to another specified by EPSG codes
+    or pyproj.Proj objects. The output projection window is guaranteed to have
+    ordering compatible for use with ice.Raster.
+
+    Parameters
+    ----------
+    projWin: list or array_like
+        Projection window of [upper_left_x, upper_left_y, lower_right_x, lower_right_y].
+    epsg_in: int, optional
+        Input EPSG projection.
+    epsg_out: int, optional
+        Output EPSG projection.
+    proj_in: pyproj.Proj, optional
+        Input Proj object.
+    proj_out: pyproj.Proj, optional
+        Output Proj object.
+
+    Returns
+    -------
+    out_projWin: list
+        Transformed projection window.
+    """
+    # Unpack input projection window (we use the names lon/lat here)
+    lon_min, lat_max, lon_max, lat_min = projWin
+
+    # Traverse four corners of input projection window
+    x = []; y = []
+    for lon, lat in ((lon_min, lat_max), (lon_max, lat_max),
+                     (lon_max, lat_min), (lon_min, lat_min)):
+        xval, yval = transform_coordinates(
+            lon, lat, epsg_in=epsg_in, epsg_out=epsg_out, proj_in=proj_in, proj_out=proj_out
+        )
+        x.append(xval)
+        y.append(yval)
+    
+    # Compute and return transformed projection window
+    return [np.min(x), np.max(y), np.max(x), np.min(y)]
+
 def extract_perpendicular_transects(x, y, raster, W=15.0e3, N=100, N_perp=100,
                                     return_coords=False, return_theta=False):
     """
