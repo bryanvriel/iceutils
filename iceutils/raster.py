@@ -1216,6 +1216,9 @@ def write_array_as_raster(array, hdr, filename, epsg=None, dtype=None, driver='E
     if dtype is None:
         dtype = np.dtype(array.dtype)
         dtype = numpy_to_gdal_type[dtype.str]
+    # Check if header has EPSG code
+    if epsg is None and hdr.epsg is not None:
+        epsg = hdr.epsg
     # Write
     raster.write_gdal(filename, epsg=epsg, dtype=dtype, driver=driver)
 
@@ -1253,12 +1256,12 @@ def griddata(x, y, z, dx, dy, x_extent=None, y_extent=None, method='linear', eps
     from scipy.interpolate import griddata
 
     # Define the output grid
-    if x_extent is not None:
+    if x_extent is None:
         x_min, x_max = np.min(x), np.max(x)
     else:
         x_min, x_max = x_extent
 
-    if y_extent is not None:
+    if y_extent is None:
         y_min, y_max = np.min(y), np.max(y)
     else:
         y_min, y_max = y_extent

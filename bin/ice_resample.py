@@ -50,7 +50,7 @@ def main(args):
         inobj.resample(ref.hdr)
 
         # Write to disk
-        inobj.write_gdal(args.output, epsg=3413)
+        inobj.write_gdal(args.output, epsg=ref.hdr.epsg)
 
         
 if __name__ == '__main__':
