@@ -34,7 +34,7 @@ def parse():
     parser.add_argument('-sigma', action='store_true',
         help='Plot errobars using weights dataset.')
     parser.add_argument('-frame', action='store', type=str, default='mean',
-        help='Type of stat to use for displaying map (mean, initial, std). Default: mean.')
+        help='Type of stat to use for displaying map (mean, initial, final, std). Default: mean.')
     return parser.parse_args()
 
 def main(args):
@@ -45,6 +45,8 @@ def main(args):
     # Get frame
     if args.frame == 'initial':
         mean = stack.slice(0, key=args.key)
+    elif args.frame == 'final':
+        mean = stack.slice(stack.Nt - 1, key=args.key)
     elif args.frame == 'mean':
         mean = stack.mean(key=args.key)
     elif args.frame == 'std':
