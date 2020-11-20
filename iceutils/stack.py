@@ -30,7 +30,13 @@ class Stack:
         # If file opened in read mode, save RasterInfo and time information
         if self.mode in ('r', 'r+'):
             self.hdr = RasterInfo(stackfile=filename)
-            self.tdec = self.fid['tdec'][()]
+
+            # Read time array
+            try:
+                self.tdec = self.fid['tdec'][()]
+            except KeyError:
+                self.tdec = self.fid['t'][()]
+                warnings.warn('Using dataset "t" for time array.', category=UserWarning)
 
             # Also try to read format attribute
             try:
