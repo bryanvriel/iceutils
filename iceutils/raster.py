@@ -237,7 +237,8 @@ class Raster:
         driver = gdal.GetDriverByName(driver)
 
         # Create dataset
-        ds = driver.Create(filename, xsize=self.hdr.nx, ysize=self.hdr.ny, bands=1, eType=dtype)
+        ds = driver.Create(filename, xsize=int(self.hdr.nx), ysize=int(self.hdr.ny),
+                           bands=1, eType=dtype)
 
         # Create geotransform and projection
         if epsg is None and self.hdr._epsg is not None:
