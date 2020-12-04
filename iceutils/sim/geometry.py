@@ -501,7 +501,7 @@ def smoothe_line(x, y, win_size=20):
     import pandas as pd
 
     # First create spline representation
-    spline = UnivariateSpline(x, y, s=0.001, ext='extrapolate')
+    spline = interp1d(x, y, kind='linear', fill_value='extrapolate', bounds_error=False)
 
     # Extend coordinates to account for smoothing window
     dx = x[1] - x[0]
