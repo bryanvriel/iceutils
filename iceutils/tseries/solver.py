@@ -14,7 +14,7 @@ from ..raster import get_chunks
 from ..stack import Stack
 from .. import pymp
 from .LinearRegression import *
-from .model import build_temporal_model
+from .model import build_temporal_model, build_temporal_model_fromfile
 
 def inversion(stack, userfile, outdir, cleaned_stack=None,
               solver_type='lsqr', dkey='data', nt_out=200, n_proc=8, regParam=1.0,
@@ -22,14 +22,14 @@ def inversion(stack, userfile, outdir, cleaned_stack=None,
               no_weights=False, mask_raster=None):
 
     # Create a time series model defined at the data points
-    data_model, Cm = build_temporal_model(stack.tdec, userfile, cov=True)
+    data_model, Cm = build_temporal_model_fromfile(stack.tdec, userfile, cov=True)
     regMat = np.linalg.inv(Cm)
     # Cache the design matrix
     G = data_model.G
 
     # Create a time series model defined at equally spaced time points
     tfit = np.linspace(stack.tdec[0], stack.tdec[-1], nt_out)
-    model = build_temporal_model(tfit, userfile, cov=False)
+    model = build_temporal_model_fromfile(tfit, userfile, cov=False)
 
     # Load a mask and resample to stack geometry
     if mask_raster is not None:
@@ -47,7 +47,11 @@ def inversion(stack, userfile, outdir, cleaned_stack=None,
                            n_nonzero_coefs=n_nonzero_coefs, n_min=n_min)
 
     # Get list of chunks
-    _, chunk_ny, chunk_nx = stack['chunk_shape'][()]
+    try:
+        _, chunk_ny, chunk_nx = stack['chunk_shape'][()]
+    except KeyError:
+        # Fall back to default
+        chunk_ny = chunk_nx = 128
     chunks = get_chunks((stack.Ny, stack.Nx), chunk_ny, chunk_nx)
     
     # Instantiate and initialize output stacks
@@ -74,13 +78,20 @@ def inversion(stack, userfile, outdir, cleaned_stack=None,
             wgts2d = np.ones_like(data2d)
         else:
             wgts2d = stack.get_chunk(islice, jslice, key='weights')
-        _, chunk_ny, chunk_nx = data2d.shape
-        chunk_npix = chunk_ny * chunk_nx
 
         # Extract valid pixels in this chunk into 1d arrays
-        chunk_mask = mask[islice, jslice]
-        data1d = data2d[:, chunk_mask]
-        wgts1d = wgts2d[:, chunk_mask]
+        if stack.fmt == 'NHW':
+            _, chunk_ny, chunk_nx = data2d.shape
+            chunk_npix = chunk_ny * chunk_nx
+            chunk_mask = mask[islice, jslice]
+            data1d = data2d[:, chunk_mask]
+            wgts1d = wgts2d[:, chunk_mask]
+        else:
+            chunk_ny, chunk_nx, _ = data2d.shape
+            chunk_npix = chunk_ny * chunk_nx
+            chunk_mask = mask[islice, jslice]
+            data1d = data2d[chunk_mask, :].T
+            wgts1d = wgts2d[chunk_mask, :].T
         npix = data1d.shape[1]
 
         # Transfer to shared arrays
