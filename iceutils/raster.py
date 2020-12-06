@@ -518,6 +518,7 @@ class RasterInfo:
         try:
             self._epsg = wkt_to_epsg(dset.GetProjection())
         except TypeError:
+            self._epsg = None
             pass
 
         # Optional subset
@@ -1283,7 +1284,7 @@ def griddata(x, y, z, dx, dy, x_extent=None, y_extent=None, method='linear', eps
 
     return raster
 
-def render_kml(raster, filename, dpi=300, cmap='viridis', clim=None, n_proc=1):
+def render_kml(raster, filename, dpi=300, cmap='viridis', clim=None, colorbar=False, n_proc=1):
     """
     Renders Raster data to an image and creates a KML for viewing in Google Earth.
 
@@ -1299,8 +1300,12 @@ def render_kml(raster, filename, dpi=300, cmap='viridis', clim=None, n_proc=1):
         Colormap for plotting data. Default: 'viridis'.
     clim: {tuple, None}, optional
         Color limit for plotting data. Default: None.
+    colorbar: bool, optional
+        Put colorbar overlay on image. Default: False.
     n_proc: int, optional
         Number of processors for warping raster if not in EPSG:4326. Default: 1.
+    kmz: bool, optional
+        Save as KMZ instead of KML. Default: False.
 
     Returns
     -------
@@ -1335,7 +1340,39 @@ def render_kml(raster, filename, dpi=300, cmap='viridis', clim=None, n_proc=1):
     ground.latlonbox.south = south
     ground.latlonbox.east = east
     ground.latlonbox.west = west
-    kml.save(filename)
+
+    # Colorbar
+    if colorbar:
+
+        # Make the colorbar image
+        fig_cbar = plt.figure(figsize=(1.0, 2.0))
+        cax = fig_cbar.add_axes([0.0, 0.05, 0.2, 0.9])
+        cbar = fig_cbar.colorbar(im, cax=cax)
+        cbarfile = froot + '_colorbar.png'
+        fig_cbar.savefig(cbarfile, dpi=200, transparent=False)
+
+        # Add to KML
+        screen = kml.newscreenoverlay(name='ScreenOverlay')
+        screen.icon.href = cbarfile
+        screen.overlayxy = simplekml.OverlayXY(x=0, y=0,
+                                               xunits=simplekml.Units.fraction,
+                                               yunits=simplekml.Units.fraction)
+        screen.screenxy = simplekml.ScreenXY(x=0.015, y=0.075,
+                                             xunits=simplekml.Units.fraction,
+                                             yunits=simplekml.Units.fraction)
+        screen.rotationXY = simplekml.RotationXY(x=0.5, y=0.5,
+                                                 xunits=simplekml.Units.fraction,
+                                                 yunits=simplekml.Units.fraction)
+        screen.size.x = 0
+        screen.size.y = 0
+        screen.size.xunits = simplekml.Units.fraction
+        screen.size.yunits = simplekml.Units.fraction
+        screen.visibility = 1
+
+    if filename.endswith('.kmz'):
+        kml.savekmz(filename)
+    else:
+        kml.save(filename)
 
     return
 
