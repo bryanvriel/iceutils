@@ -1481,4 +1481,25 @@ def load_ann(filename, comment=';'):
 
     return ann
 
+def get_utm_zone(lon):
+    """
+    Computes UTM zone from longitude (in degrees).
+    """
+    z = lon + 180.0
+    z /= 6.0
+    zone = int(np.ceil(z))
+    return zone
+
+def get_utm_EPSG(lon, lat):
+    """
+    Automatically constructs UTM EPSG code from a lon/lat coordinate (degrees).
+    """
+    zone = get_utm_zone(lon)
+    if lat >= 0.0:
+        epsg = '326%02d' % zone
+    else:
+        epsg = '327%02d' % zone
+    return int(epsg)
+ 
+
 # end of file
