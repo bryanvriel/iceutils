@@ -277,7 +277,7 @@ class Raster:
             return
 
         # Interpolate
-        data = interpolate_raster(self, None, None, ref_hdr=hdr, order=order)
+        data = interpolate_raster(self, None, None, ref_hdr=hdr, time_index=None, order=order)
 
         # Update members
         self.data = data
@@ -368,7 +368,7 @@ class Raster:
         y = np.linspace(point1[1], point2[1], n)
 
         # Perform interpolation
-        z = interpolate_raster(self, x, y, order=order)
+        z = interpolate_raster(self, x, y, ref_hdr=None, time_index=None, order=order)
 
         # Return with or without coordinates
         if return_location:
@@ -950,7 +950,7 @@ class RasterInfo:
 # Global utility functions
 # --------------------------------------------------------------------------------
 
-def interpolate_raster(raster, x, y, ref_hdr=None, order=3, time_index=None):
+def interpolate_raster(raster, x, y, ref_hdr=None, time_index=None, **kwargs):
     """
     Interpolate raster at arbitrary points.
 
@@ -964,10 +964,10 @@ def interpolate_raster(raster, x, y, ref_hdr=None, order=3, time_index=None):
         Y-coordinates for output interpolation grid.
     ref_hdr: RasterInfo, optional
         RasterInfo to read output coordinates from. Default: None.
-    order: int, optional
-        Order of interpolating spline. Default: 3.
     time_index: int, optional
         Time index to extract time slice from raster stack. Default: None.
+    **kwargs:
+        Keyword arguments passed to scipy.ndimage.map_coordinates.
 
     Returns
     -------
@@ -981,9 +981,9 @@ def interpolate_raster(raster, x, y, ref_hdr=None, order=3, time_index=None):
         r_data = raster.data
 
     # Interpolate
-    return interpolate_array(r_data, raster.hdr, x, y, ref_hdr=ref_hdr, order=order)
+    return interpolate_array(r_data, raster.hdr, x, y, ref_hdr=ref_hdr, **kwargs)
 
-def interpolate_array(array, hdr, x, y, ref_hdr=None, order=3):
+def interpolate_array(array, hdr, x, y, ref_hdr=None, **kwargs):
     """
     Interpolate 2D array at arbitrary points.
 
@@ -999,8 +999,8 @@ def interpolate_array(array, hdr, x, y, ref_hdr=None, order=3):
         Y-coordinates for output interpolation grid.
     ref_hdr: RasterInfo, optional
         RasterInfo to read output coordinates from. Default: None.
-    order: int, optional
-        Order of interpolating spline. Default: 3.
+    **kwargs:
+        Keyword arguments passed to scipy.ndimage.map_coordinates.
 
     Returns
     -------
@@ -1022,13 +1022,13 @@ def interpolate_array(array, hdr, x, y, ref_hdr=None, order=3):
     coords = np.vstack((row, col))
 
     # Interpolate
-    values = map_coordinates(array, coords, order=order, prefilter=False,
-                             mode='constant', cval=np.nan)
+    values = map_coordinates(array, coords, output=None, prefilter=False, **kwargs)
 
     # Recover original shape and return
     return values.reshape(x.shape)
 
-def warp(raster, target_epsg=None, target_hdr=None, target_dims=None, order=3, n_proc=1):
+def warp(raster, target_epsg=None, target_hdr=None, target_dims=None, target_res=None,
+         n_proc=1, **kwargs):
     """
     Warp raster to another RasterInfo hdr object with a different projection system.
     Currently only supports EPSG projection representations.
@@ -1043,10 +1043,12 @@ def warp(raster, target_epsg=None, target_hdr=None, target_dims=None, order=3, n
         RasterInfo specifying output geographical grid and projection.
     target_dims: (list, tuple), optional
         Output warped image dimensions. Default: None.
-    order: int, optional
-        Order of interpolating spline. Default: 3.
+    target_res: float, optional
+        Output pixel spacing. Default: None.
     n_proc: int, optional
         Number of processors to run warping on. Default: 1.
+    **kwargs:
+        Keyword arguments passed to scipy.ndimage.map_coordinates.
 
     Returns
     -------
@@ -1084,6 +1086,9 @@ def warp(raster, target_epsg=None, target_hdr=None, target_dims=None, order=3, n
         # Get target dimensions from user input or source raster
         if target_dims is not None:
             out_ny, out_nx = target_dims
+        elif target_res is not None:
+            out_ny = int(np.floor((trg_ymax - trg_ymin) / target_res)) + 1
+            out_nx = int(np.floor((trg_xmax - trg_xmin) / target_res)) + 1
         else:
             out_ny, out_nx = raster.hdr.ny, raster.hdr.nx
 
@@ -1122,7 +1127,9 @@ def warp(raster, target_epsg=None, target_hdr=None, target_dims=None, order=3, n
                                                 always_xy=True)
 
                 # Interpolate source raster
-                data_warped[islice, jslice] = interpolate_raster(raster, src_x, src_y, order=order)
+                data_warped[islice, jslice] = interpolate_raster(raster, src_x, src_y,
+                                                                 ref_hdr=None, time_index=None,
+                                                                 **kwargs)
 
     else:
         data_warped = np.zeros(trg_y.shape, dtype=raster.data.dtype)
@@ -1134,8 +1141,12 @@ def warp(raster, target_epsg=None, target_hdr=None, target_dims=None, order=3, n
                                             trg_y[islice, jslice],
                                             always_xy=True)
 
+            print(src_x.min(), src_x.max())
+
             # Interpolate source raster
-            data_warped[islice, jslice] = interpolate_raster(raster, src_x, src_y, order=order)
+            data_warped[islice, jslice] = interpolate_raster(raster, src_x, src_y,
+                                                             ref_hdr=None, time_index=None, 
+                                                             **kwargs)
 
     # Return new raster
     return Raster(data=data_warped, hdr=target_hdr)
