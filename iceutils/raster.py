@@ -162,7 +162,9 @@ class Raster:
             srcWin = [x0, y0, x1 - x0, y1 - y0]
 
         # Use translate to convert dataset to in-memory data
-        mem_ds = gdal.Translate('/vsimem/temp.tif', dset, projWin=projWin, srcWin=srcWin)
+        opts = gdal.TranslateOptions(bandList=[band,])
+        mem_ds = gdal.Translate('/vsimem/temp.tif', dset, projWin=projWin, srcWin=srcWin,
+                                options=opts)
 
         # Load RasterInfo
         hdr = RasterInfo('/vsimem/temp.tif')
