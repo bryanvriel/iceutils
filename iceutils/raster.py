@@ -102,17 +102,17 @@ class Raster:
             else:
                 rasterfile = filename
 
-        # Load the header info
-        self.hdr = RasterInfo(rasterfile=rasterfile, stackfile=stackfile)
-
-        # Load subset/slicing information
-        islice, jslice = self.hdr.subset_region(projWin=projWin, islice=islice, jslice=jslice)
-
-        # Load the raster data
+        # Load raster data and do any subsetting using GDAL directly
         if rasterfile is not None:
-            self.data = self.load_gdal(rasterfile, band=band, islice=islice, jslice=jslice)
+            self.data, self.hdr = self.load_gdal(filename, band=band, projWin=projWin,
+                                                 islice=islice, jslice=jslice)
         elif stackfile is not None:
             assert h5path is not None
+            # Load the header info manually
+            self.hdr = RasterInfo(stackfile=stackfile)
+            # Load subset/slicing information
+            islice, jslice = self.hdr.subset_region(projWin=projWin, islice=islice, jslice=jslice)
+            # Read data
             self.data = self.load_hdf5(stackfile, h5path, islice=islice, jslice=jslice)
         else:
             raise ValueError('Must provide GDAL raster of HDF5 stack.')
@@ -127,7 +127,7 @@ class Raster:
         return
 
     @staticmethod
-    def load_gdal(filename, band=1, islice=None, jslice=None):
+    def load_gdal(filename, band=1, projWin=None, islice=None, jslice=None):
         """
         Load GDAL raster data from file.
 
@@ -137,6 +137,8 @@ class Raster:
             Filename for GDAL-compatible raster to read.
         band: int, optional
             Band number to read from raster. Default: 1.
+        projWin: list, optional
+            GDAL-compatible projWin for subsetting raster. Default: None.
         islice: slice, optional
             Slice object specifying image rows to subset.
         jslice: slice, optional
@@ -150,40 +152,31 @@ class Raster:
         # Open dataset
         dset = gdal.Open(filename, gdal.GA_ReadOnly)
 
-        # Get band
-        b = dset.GetRasterBand(band)
-
-        # Read whole dataset
-        if islice is None and jslice is None:
-            d = b.ReadAsArray()
-
-        # Or subset using gdal raster functionality
-        else:
-
+        # Compute srcWin if no projWin given and islice/jslice given
+        srcWin = None
+        if projWin is None and islice is not None and jslice is not None:
             # Unpack the slice bounds
             y0, y1 = int(islice.start), int(islice.stop)
             x0, x1 = int(jslice.start), int(jslice.stop)
-            # Compute buffer size
-            xsize = x1 - x0
-            ysize = y1 - y0
+            # Construct srcWin
+            srcWin = [x0, y0, x1 - x0, y1 - y0]
 
-            # Read raster portion
-            scanline = b.ReadRaster(xoff=x0, yoff=y0, xsize=xsize, ysize=ysize,
-                                    buf_xsize=xsize, buf_ysize=ysize, buf_type=b.DataType)
+        # Use translate to convert dataset to in-memory data
+        mem_ds = gdal.Translate('/vsimem/temp.tif', dset, projWin=projWin, srcWin=srcWin)
 
-            # Convert to NumPy array
-            fmt = gdal_type_to_str[b.DataType]
-            d = np.frombuffer(scanline, dtype=fmt[0])
+        # Load RasterInfo
+        hdr = RasterInfo('/vsimem/temp.tif')
 
-            # Special handling for complex values
-            if fmt in ('ff', 'dd'):
-                d = d[0::2] + 1j * d[1::2]
+        # Convert to Numy array
+        d = mem_ds.ReadAsArray()
 
-            # Reshape to 2D array and get a copy to allow for read/write
-            d = d.reshape(ysize, xsize).copy()
+        # Close temporary datasets
+        gdal.Unlink('/vsimem/temp.tif')
+        dset = None
+        mem_ds = None
 
         # Return array
-        return d
+        return d, hdr
 
     @staticmethod
     def load_hdf5(filename, h5path, islice=None, jslice=None):
