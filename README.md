@@ -68,7 +68,15 @@ As shown before, one can load raster files by providing the path to the GDAL-com
 ```python
 raster = ice.Raster(rasterfile='velocity.tif')
 ```
-If you would like to load only a subset of the raster, then you can provide Python `slice` objects to the `Raster` constructor. These slices correspond to min-max indices of the image in row and column coordinates:
+If you would like to load only a subset of the raster, you may provide a GDAL-compatible projection window (e.g., `projWin`) defined by the standard `[ulx, uly, lrx, lry]`:
+```python
+# Projection window (same coordinate system/SRS as raster)
+projWin = [-120, 30, -118, 28]
+
+# Load subset raster
+raster = ice.Raster('large_mosaic_raster.vrt', projWin=projWin)
+```
+Alternatively, you may provide Python `slice` objects to the `Raster` constructor. These slices correspond to min-max indices of the image in row and column coordinates:
 ```python
 
 # Row bounds
@@ -82,7 +90,7 @@ raster = ice.Raster(rasterfile='velocity.tif',
                     islice=islice,
                     jslice=jslice)
 ```
-Of course, the `RasterInfo` instance contained in the raster will have its data automatically adjusted for the subset bounds.
+Of course, for both the `projWin` and `islice/jslice` interfaces, the `RasterInfo` instance contained in the raster will have its data automatically adjusted for the subset bounds.
 
 ### Writing rasters to file
 
