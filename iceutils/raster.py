@@ -77,6 +77,8 @@ class Raster:
     projWin: list, optional
         List of [upper_left_x, upper_left_y, lower_right_x, lower_right_y] for geographic
         bounding box to subset.
+    gdalOpts: dict, optional
+        Dictionary of extra gdal.TranslateOptions kwargs. Default: None.
     """
 
     def __init__(self,
@@ -85,7 +87,7 @@ class Raster:
                  rasterfile=None, band=1,
                  stackfile=None, h5path=None,
                  islice=None, jslice=None,
-                 projWin=None):
+                 projWin=None, gdalOpts={}):
 
         # If data and header are provided, save them and return
         if data is not None and hdr is not None:
@@ -105,7 +107,7 @@ class Raster:
         # Load raster data and do any subsetting using GDAL directly
         if rasterfile is not None:
             self.data, self.hdr = self.load_gdal(filename, band=band, projWin=projWin,
-                                                 islice=islice, jslice=jslice)
+                                                 islice=islice, jslice=jslice, **gdalOpts)
         elif stackfile is not None:
             assert h5path is not None
             # Load the header info manually
@@ -127,7 +129,7 @@ class Raster:
         return
 
     @staticmethod
-    def load_gdal(filename, band=1, projWin=None, islice=None, jslice=None):
+    def load_gdal(filename, band=1, projWin=None, islice=None, jslice=None, **gdalOpts):
         """
         Load GDAL raster data from file.
 
@@ -143,6 +145,8 @@ class Raster:
             Slice object specifying image rows to subset.
         jslice: slice, optional
             Slice object specifying image columns to subset.
+        gdalOpts: **kwargs
+            Extra kwargs for gdal.TranslateOptions (see https://gdal.org/python/osgeo.gdal-module.html#TranslateOptions) for complete list of options.
 
         Returns
         -------
@@ -162,9 +166,10 @@ class Raster:
             srcWin = [x0, y0, x1 - x0, y1 - y0]
 
         # Use translate to convert dataset to in-memory data
-        opts = gdal.TranslateOptions(bandList=[band,])
-        mem_ds = gdal.Translate('/vsimem/temp.tif', dset, projWin=projWin, srcWin=srcWin,
-                                options=opts)
+        opts = gdal.TranslateOptions(
+            bandList=[band,], projWin=projWin, srcWin=srcWin, **gdalOpts
+        )
+        mem_ds = gdal.Translate('/vsimem/temp.tif', dset, options=opts)
 
         # Load RasterInfo
         hdr = RasterInfo('/vsimem/temp.tif')
