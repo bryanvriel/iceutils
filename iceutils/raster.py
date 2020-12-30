@@ -256,7 +256,7 @@ class Raster:
 
         return
 
-    def resample(self, hdr, order=3):
+    def resample(self, hdr, **kwargs):
         """
         Resample raster data in-place to another coordinate system provided by
         a RasterInfo object.
@@ -265,8 +265,8 @@ class Raster:
         ----------
         hdr: RasterInfo
             RasterInfo specifying output geometry to resample to.
-        order: int, optional
-            Order of interpolating spline. Default: 3.
+        **kwargs:
+            Extra parameters to pass to scipy.ndimage.map_coordinates.
 
         Returns
         -------
@@ -277,7 +277,7 @@ class Raster:
             return
 
         # Interpolate
-        data = interpolate_raster(self, None, None, ref_hdr=hdr, time_index=None, order=order)
+        data = interpolate_raster(self, None, None, ref_hdr=hdr, time_index=None, **kwargs)
 
         # Update members
         self.data = data
