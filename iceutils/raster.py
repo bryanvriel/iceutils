@@ -1387,14 +1387,20 @@ def render_kml(raster, filename, dpi=300, cmap='viridis', clim=None, colorbar=Fa
 
     return
 
-def wkt_to_epsg(wkt):
+def wkt_to_epsg(wkt, match=False):
     """
     Convenience function to convert a projection formatted as a WKT (Well Known Transformation)
-    to an EPSG code.
+    to an EPSG code. Sometimes AutoIdentifyEPSG cannot determine the correct projection,
+    and we need to find an approximate match using FindMatches (specify match=True).
     """
     proj = osr.SpatialReference(wkt=wkt)
-    proj.AutoIdentifyEPSG()
-    epsg = int(proj.GetAttrValue('AUTHORITY', 1))
+    if match:
+        match_proj = proj.FindMatches()[0][0]
+        match_proj.AutoIdentifyEPSG()
+        epsg = int(match_proj.GetAttrValue('AUTHORITY', 1))
+    else: 
+        proj.AutoIdentifyEPSG()
+        epsg = int(proj.GetAttrValue('AUTHORITY', 1))
     return epsg
 
 def get_chunks(dims, chunk_y, chunk_x):
