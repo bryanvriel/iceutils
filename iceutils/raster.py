@@ -305,7 +305,7 @@ class Raster:
 
         # Create new header
         X, Y = [arr[::factor, ::factor] for arr in self.hdr.meshgrid()]
-        self.hdr = RasterInfo(X=X, Y=Y)
+        self.hdr = RasterInfo(X=X, Y=Y, epsg=self.hdr.epsg)
 
         return
 
