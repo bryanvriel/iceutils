@@ -1033,7 +1033,8 @@ def interpolate_array(array, hdr, x, y, ref_hdr=None, **kwargs):
     # Recover original shape and return
     return values.reshape(x.shape)
 
-def warp(raster, target_epsg=None, target_hdr=None, target_dims=None, target_res=None,
+def warp(raster, target_epsg=None, target_srs=None, source_srs=None,
+         target_hdr=None, target_dims=None, target_res=None,
          n_proc=1, **kwargs):
     """
     Warp raster to another RasterInfo hdr object with a different projection system.
@@ -1045,6 +1046,10 @@ def warp(raster, target_epsg=None, target_hdr=None, target_dims=None, target_res
         Raster object to warp.
     target_epsg: int, optional
         Specific EPSG of output reference system. Default: None.
+    target_srs: str, optional
+        SRS for target projection if EPSG not provided. Default: None.
+    source_srs: str, optional
+        SRS for source projection if EPSG not in header. Default: None.
     target_hdr: RasterInfo, optional
         RasterInfo specifying output geographical grid and projection.
     target_dims: (list, tuple), optional
@@ -1061,18 +1066,24 @@ def warp(raster, target_epsg=None, target_hdr=None, target_dims=None, target_res
     warped_raster: Raster
         Output warped Raster object.
     """
-    # Check source RasterInfo has EPSG value set
-    assert raster.hdr.epsg is not None, 'No EPSG information found for source raster.'
+    # Check source RasterInfo has EPSG value set or source_srs is provided
+    if raster.hdr.epsg is None:
+        assert source_srs is not None, 'Must provide source_srs since no EPSG found for input.'
+        src_proj = pyproj.Proj(source_srs)
+    else:
+        src_proj = pyproj.Proj('EPSG:%d' % raster.hdr.epsg)
 
-    # Create projection objects
-    src_proj = pyproj.Proj('EPSG:%d' % raster.hdr.epsg)
-    if target_epsg is None and target_hdr is not None:
-        assert target_hdr.epsg is not None, 'No EPSG information found for target raster.'
-        trg_proj = pyproj.Proj('EPSG:%d' % target_hdr.epsg)
+    # Create target projection
+    if target_epsg is None:
+        if target_hdr is not None:
+            assert target_hdr.epsg is not None, 'No EPSG information found for target raster.'
+            trg_proj = pyproj.Proj('EPSG:%d' % target_hdr.epsg)
+        elif target_srs is not None:
+            trg_proj = pyproj.Proj(target_srs)
+        else:
+            raise ValueError('Must provide RasterInfo or target_srs.')
     elif target_epsg is not None:
         trg_proj = pyproj.Proj('EPSG:%d' % target_epsg)
-    else:
-        raise ValueError('Must supply EPSG or RasterInfo to specify target projection.')
 
     # If only EPSG code is provided, compute target grid
     if target_hdr is None:
