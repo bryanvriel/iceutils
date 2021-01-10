@@ -214,7 +214,8 @@ class Raster:
                 d = d[:,jslice]
         return d
 
-    def write_gdal(self, filename, dtype=gdal.GDT_Float32, driver='ENVI', epsg=None):
+    def write_gdal(self, filename, dtype=gdal.GDT_Float32, driver='ENVI',
+                   epsg=None, projstr=None):
         """
         Write data and header to a GDAL raster.
 
@@ -228,6 +229,8 @@ class Raster:
             GDAL-compatible raster driver for output raster file. Default: ENVI.
         epsg: int, optional
             EPSG code for output. Default: None.
+        projstr: str, optional
+            PROJ string for output if no EPSG provided. Default: None.
 
         Returns
         -------
@@ -243,11 +246,14 @@ class Raster:
         # Create geotransform and projection
         if epsg is None and self.hdr._epsg is not None:
             epsg = self.hdr._epsg
-        if epsg is not None:
+        if epsg is not None or projstr is not None:
             from osgeo import osr
             ds.SetGeoTransform(self.hdr.geotransform)
             srs = osr.SpatialReference()
-            srs.SetFromUserInput('EPSG:%d' % epsg)
+            if epsg is not None:
+                srs.SetFromUserInput('EPSG:%d' % epsg)
+            else:
+                srs.SetFromUserInput(projstr)
             ds.SetProjection(srs.ExportToWkt())
 
         # Write data
@@ -1200,7 +1206,8 @@ def warp_with_gcp_splines(raster, gcp_hdr, x=None, y=None, out_hdr=None, order=3
     # Create new Raster
     return Raster(data=out.reshape(x.shape), hdr=out_hdr)
 
-def write_array_as_raster(array, hdr, filename, epsg=None, dtype=None, driver='ENVI'):
+def write_array_as_raster(array, hdr, filename, epsg=None, projstr=None,
+                          dtype=None, driver='ENVI'):
     """
     Convenience function to write a NumPy array to a raster file with a given RasterInfo.
 
@@ -1214,6 +1221,8 @@ def write_array_as_raster(array, hdr, filename, epsg=None, dtype=None, driver='E
         Output filename.
     epsg: int, optional
         Specific EPSG code for output projection. Default: None.
+    projstr: str, optional
+            PROJ string for output if no EPSG provided. Default: None.
     dtype: int, optional
         Enum for GDAL datatype for output raster. Default: None.
 
@@ -1233,7 +1242,7 @@ def write_array_as_raster(array, hdr, filename, epsg=None, dtype=None, driver='E
     if epsg is None and hdr.epsg is not None:
         epsg = hdr.epsg
     # Write
-    raster.write_gdal(filename, epsg=epsg, dtype=dtype, driver=driver)
+    raster.write_gdal(filename, epsg=epsg, projstr=projstr, dtype=dtype, driver=driver)
 
 def griddata(x, y, z, dx, dy, x_extent=None, y_extent=None, method='linear', epsg=None):
     """
