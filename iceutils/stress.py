@@ -258,7 +258,7 @@ def robust_gradient(z, spacing=1.0, window_size=3.0, order=2, ftol=1e-5,
     Parameters
     ----------
     z : array_like
-        2-dimensional data to calculate gradient for
+        2-dimensional array containing samples of a scalar function.
     spacing: float or tuple of floats, optional
         Spacing between pixels along axis. If tuple, each element specifies
         spacing along different axes. Default: 1.0.
@@ -266,24 +266,24 @@ def robust_gradient(z, spacing=1.0, window_size=3.0, order=2, ftol=1e-5,
         Window size in units of specified spacing. If tuple provided, window size is
         specified as (win_y, win_x). Default: 3.
     order : int, optional
-        polynomial order for the robust fitting
+        Polynomial order for the robust fitting.
     ftol : float, optional
-        accepted mean residual stopping point
+        Accepted mean residual stopping point.
     maxiter : int, optional
-        maximum number of iterations of IRLS when approximating the L1 norm.
+        Maximum number of iterations of IRLS when approximating the L1-norm.
         Setting maxiter to 0 will return the coefficient solution to minimizing
         the L2-norm.
     njobs : int or None, optional
-        number of processes to use. If None, os.cpu_count() is used. 
+        Number of processes to use. If None, os.cpu_count() is used. 
 
     Returns
     -------
     z_smooth : array_like
-        2-dimensional array of smoothed data
+        2-dimensional array of smoothed data.
     z_dy : array_like
-        2-dimensional array with the column gradient
+        2-dimensional array with the column gradient.
     z_dx : array_like
-        2-dimensional array with the row gradient
+        2-dimensional array with the row gradient.
     """
     nrow, ncol = np.shape(z)
 
@@ -333,7 +333,7 @@ def robust_gradient(z, spacing=1.0, window_size=3.0, order=2, ftol=1e-5,
 
 
 def _run_IRLS(Z, G, half_sizes, ftol, maxiter, coord):
-    """ Iterative Reweighted Least Squares to approximate the optimal L1 norm 
+    """ Iterative Reweighted Least Squares to minimize the L1 norm 
     for a window surrounding a pixel. --> ||Gx-d||_1
 
     Paramters
@@ -385,9 +385,8 @@ def _run_IRLS(Z, G, half_sizes, ftol, maxiter, coord):
     # Get sub-window of data surrounding coordinate
     d = Z[rstart:rend, cstart:cend].ravel()
 
-    # Skip if window doesn't have nan
+    # Ignore any nan values
     nan_mask = np.isnan(d)
-    # Still possible that this particular window won't have nans
     if (len(nan_mask) > 0):
         G = np.delete(G, nan_mask, axis=0)
         d = np.delete(d, nan_mask)
