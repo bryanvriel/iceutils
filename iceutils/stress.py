@@ -1,10 +1,18 @@
 #-*- coding: utf-8 -*-
 
 import numpy as np
+from itertools import product
+from functools import partial
+from multiprocessing import Pool
 import sys
 
-def compute_stress_strain(vx, vy, dx=100, dy=-100, grad_method='numpy', window_size=3,
-                          h=None, b=None, AGlen=None, rho_ice=917.0, g=9.80665, rotate=False, n=3):
+# TODO:
+# 1) Routine for filling NaNs, probably with inpainting of some sort
+# 2) Computation, storing, and application of NaN masks
+
+def compute_stress_strain(vx, vy, dx=100, dy=-100, grad_method='numpy',
+                          h=None, b=None, AGlen=None, rho_ice=917.0, g=9.80665, rotate=False,
+                          n=3, **kwargs):
     """
     Compute stress and strain fields and return in dictionaries.
     """
@@ -12,10 +20,8 @@ def compute_stress_strain(vx, vy, dx=100, dy=-100, grad_method='numpy', window_s
     Ny, Nx = vx.shape
 
     # Compute velocity gradients
-    L11 = gradient(vx, dx, axis=1, window_size=window_size, method=grad_method)
-    L12 = gradient(vx, dy, axis=0, window_size=window_size, method=grad_method)
-    L21 = gradient(vy, dx, axis=1, window_size=window_size, method=grad_method)
-    L22 = gradient(vy, dy, axis=0, window_size=window_size, method=grad_method)
+    L12, L11 = gradient(vx, spacing=(dy, dx), method=grad_method, **kwargs)
+    L22, L21 = gradient(vy, spacing=(dy, dx), method=grad_method, **kwargs)
 
     # Compute components of strain-rate tensor
     D = np.empty((2, 2, vx.size))
@@ -89,27 +95,23 @@ def compute_stress_strain(vx, vy, dx=100, dy=-100, grad_method='numpy', window_s
     if h is not None:
 
         # Compute thickness gradients
-        h_x = gradient(h, dx, axis=1, window_size=window_size, method=grad_method)
-        h_y = gradient(h, dy, axis=0, window_size=window_size, method=grad_method)
+        h_x = gradient(h, dx, axis=1, method=grad_method, **kwargs)
+        h_y = gradient(h, dy, axis=0, method=grad_method, **kwargs)
 
         # For surface, add bed if it exists to compute driving stress
         if b is not None:
             s = h + b
-            s_x = gradient(s, dx, axis=1, window_size=window_size, method=grad_method)
-            s_y = gradient(s, dy, axis=0, window_size=window_size, method=grad_method)
+            s_x = gradient(s, dx, axis=1, method=grad_method, **kwargs)
+            s_y = gradient(s, dy, axis=0, method=grad_method, **kwargs)
         else:
             s_x = h_x
             s_y = h_y
 
         # Membrane stresses
-        tmxx = gradient(h * (2 * txx + tyy), dx, axis=1,
-                        window_size=window_size, method=grad_method)
-        tmxy = gradient(h * 0.5 * (txy + tyx), dy, axis=0,
-                        window_size=window_size, method=grad_method)
-        tmyy = gradient(h * (2 * tyy + txx), dy, axis=0,
-                        window_size=window_size, method=grad_method)
-        tmyx = gradient(h * 0.5 * (txy + tyx), dx, axis=1,
-                        window_size=window_size, method=grad_method)
+        tmxx = gradient(h * (2 * txx + tyy), dx, axis=1, method=grad_method, **kwargs)
+        tmxy = gradient(h * 0.5 * (txy + tyx), dy, axis=0, method=grad_method, **kwargs)
+        tmyy = gradient(h * (2 * tyy + txx), dy, axis=0, method=grad_method, **kwargs)
+        tmyx = gradient(h * 0.5 * (txy + tyx), dx, axis=1, method=grad_method, **kwargs)
 
         # Driving stresses
         tdx = -1.0 * rho_ice * g * h * s_x
@@ -140,7 +142,7 @@ def compute_stress_strain(vx, vy, dx=100, dy=-100, grad_method='numpy', window_s
     return strain_dict, stress_dict
 
 
-def gradient(z, spacing, axis=0, window_size=3, method='numpy'):
+def gradient(z, spacing=1.0, axis=None, method='numpy', **kwargs):
     """
     Calls either Numpy or Savitzky-Golay gradient computation routines.
 
@@ -149,26 +151,38 @@ def gradient(z, spacing, axis=0, window_size=3, method='numpy'):
     z: array_like
         2-dimensional array containing samples of a scalar function.
     spacing: float or tuple of floats, optional
-        Spacing between f values along specified axes. If tuple provided, spacing is
-        specified as (dy, dx). Default is unitary spacing.
-    window_size: int, optional
-        Window size for Savitzky-Golay in units of specified spacing. Default: 3.
+        Spacing between f values along specified axes. If tuple provided, spacing corresponds
+        to axes directions specified by axis. Default: 1.0.
+    axis: None or int or tuple of ints, optional
+        Axis or axes to compute gradient. If None, derivative computed along all
+        dimensions. Default: 0.
     method: str, optional
-        Method specifier in ('numpy', 'sgolay'). Default: 'numpy'.
+        Method specifier in ('numpy', 'sgolay', 'robust'). Default: 'numpy'.
+    **kwargs:
+        Extra keyword arguments to pass to specific gradient computation.
 
     Returns
     -------
-    s: array_like
-        Gradient of z along specified axis.
+    s: ndarray or list of ndarray
+        Set of ndarrays (or single ndarry for only one axis) with same shape as z
+        corresponding to the derivatives of z with respect to each axis.
     """
     if method == 'numpy':
         s = np.gradient(z, spacing, axis=axis, edge_order=2)
+    elif method == 'sgolay':
+        s = sgolay_gradient(z, spacing=spacing, axis=axis, **kwargs)
+    elif method == 'robust':
+        zs, z_dy, z_dx = robust_gradient(z, spacing=spacing, **kwargs)
+        s = (z_dy, z_dx)
+        if axis is not None and isinstance(axis, int):
+            s = s[axis]
     else:
-        s = sgolay_gradient(z, spacing=spacing, axis=axis, window_size=window_size)
+        raise ValueError('Unsupported gradient method.')
+
     return s
 
 
-def sgolay_gradient(z, spacing=1.0, axis=0, window_size=3, order=4):
+def sgolay_gradient(z, spacing=1.0, axis=None, window_size=3, order=4):
     """
     Wrapper around Savitzky-Golay code to compute window size in pixels and call _sgolay2d
     with correct arguments.
@@ -179,40 +193,32 @@ def sgolay_gradient(z, spacing=1.0, axis=0, window_size=3, order=4):
         2-dimensional array containing samples of a scalar function.
     spacing: float or tuple of floats, optional
         Spacing between f values along specified axes. If tuple provided, spacing is
-        specified as (dy, dx). Default is unitary spacing.
-    axis: int or str, optional
-        Axis along which to compute gradients. If axis is 'both', gradient computed
-        along both dimensions. Default: 0.
-    window_size: scalar, optional
-        Window size in units of specified spacing. Default: 3.
+        specified as (dy, dx) and derivative computed along both dimensions.
+        Default is unitary spacing.
+    axis: None or int, optional
+        Axis along which to compute gradients. If None, gradient computed
+        along both dimensions. Default: None.
+    window_size: scalar or tuple of scalars, optional
+        Window size in units of specified spacing. If tuple provided, window size is
+        specified as (win_y, win_x). Default: 3.
     order: int, optional
         Polynomial order. Default: 4.
 
     Returns
     -------
-    vargs: array_like
+    gradient: a
         Array or tuple of array corresponding to gradients. If both axes directions
         are specified, returns (dz/dy, dz/dx).
     """
     # Compute derivatives in both directions
-    if isinstance(spacing, (tuple, list)):
-
-        # Unpack spacing
-        assert len(spacing) == 2, 'Spacing must be 2-element tuple.'
-        dy, dx = spacing
+    if axis is None or isinstance(spacing, (tuple, list)):
 
         # Compute window sizes
-        if isintance(window_size, (tuple, list)):
-            assert len(window_size) == 2, 'Window size must be 2-element tuple.'
-            wy, wx = window_size
-        else:
-            wy = wx = window_size
-        wy, wx = int(np.ceil(abs(wy / dy))), int(np.ceil(abs(wx / dx)))
+        wy, wx = _compute_windows(window_size, spacing)
 
-        # Ensure odd windows
-        wy = _make_odd(wy)
-        wx = _make_odd(wx)
-
+        # Unpack spacing
+        dy, dx = spacing
+        
         # Call Savitzky-Golay twice in order to use different window sizes
         sy = _sgolay2d(z, wy, order=order, derivative='col')
         sx = _sgolay2d(z, wx, order=order, derivative='row')
@@ -222,6 +228,8 @@ def sgolay_gradient(z, spacing=1.0, axis=0, window_size=3, order=4):
 
     # Or derivative in a single direction
     else:
+
+        assert axis is not None, 'Must specify axis direction.'
 
         # Compute window size
         w = _make_odd(int(np.ceil(abs(window_size / spacing))))
@@ -238,35 +246,198 @@ def sgolay_gradient(z, spacing=1.0, axis=0, window_size=3, order=4):
         return s / spacing
 
 
-def _make_odd(w):
+def robust_gradient(z, spacing=1.0, window_size=3.0, order=2, ftol=1e-5,
+                    maxiter=9, njobs=None):
+    """ A robust filter that minimizes the L1 norm ||Gx-d||_1 for a 
+    window surrounding each pixel in a 2-dimensional array using the 
+    Iteratively Reweighed Least Squares (IRLS) method.
+
+    The function is multiprocessed and is robust to Laplace or Gaussian 
+    noise. NaN values are ignored when computing the IRLS optimization.
+
+    Parameters
+    ----------
+    z : array_like
+        2-dimensional array containing samples of a scalar function.
+    spacing: float or tuple of floats, optional
+        Spacing between pixels along axis. If tuple, each element specifies
+        spacing along different axes. Default: 1.0.
+    window_size: scalar or tuple of scalars, optional
+        Window size in units of specified spacing. If tuple provided, window size is
+        specified as (win_y, win_x). Default: 3.
+    order : int, optional
+        Polynomial order for the robust fitting.
+    ftol : float, optional
+        Accepted mean residual stopping point.
+    maxiter : int, optional
+        Maximum number of iterations of IRLS when approximating the L1-norm.
+        Setting maxiter to 0 will return the coefficient solution to minimizing
+        the L2-norm.
+    njobs : int or None, optional
+        Number of processes to use. If None, os.cpu_count() is used. 
+
+    Returns
+    -------
+    z_smooth : array_like
+        2-dimensional array of smoothed data.
+    z_dy : array_like
+        2-dimensional array with the column gradient.
+    z_dx : array_like
+        2-dimensional array with the row gradient.
     """
-    Convenience function to ensure a numbed is odd.
+    nrow, ncol = np.shape(z)
+
+    # Compute window sizes
+    win_size_y, win_size_x = _compute_windows(window_size, spacing)
+    half_size_y = win_size_y // 2
+    half_size_x = win_size_x // 2
+
+    # The center of the window is at (0, 0)
+    window_x = np.arange(-half_size_x, half_size_x+1)
+    window_y = np.arange(-half_size_y, half_size_y+1)
+
+    # Unpack spacing
+    if isinstance(spacing, (tuple, list)):
+        dy, dx = spacing
+    else:
+        dy = dx = spacing
+
+    # Exponents for x and y corresponding to each coefficient
+    # p(x,y) = a0 + a1*x + a2*y + a3*x^2 + a4*x*y + a5*y^2 + ...
+    exps = [(k-n, n) for k in range(order + 1) for n in range(k + 1)]
+    ncoef = len(exps)
+    G = np.empty((win_size_y * win_size_x, ncoef))
+    for i, exp in enumerate(exps):
+        G[:,i] = np.outer(window_y**exp[0], window_x**exp[1]).ravel()
+
+    # Pad data
+    Z = np.pad(z, (half_size_y, half_size_x), mode='reflect')
+
+    # Get coordinates for each data point in padded array
+    Zy = np.arange(half_size_y, nrow + half_size_y)
+    Zx = np.arange(half_size_x, ncol + half_size_x)
+    coords = product(Zy, Zx)
+
+    # Apply IRLS regression to each pixel in data
+    func = partial(_run_IRLS, Z, G, (half_size_y, half_size_x), ftol, maxiter)
+    with Pool(processes=njobs) as p:
+        x = list(p.map(func, coords))
+
+    # Get useful coefficients
+    x = np.reshape(x, (nrow, ncol, ncoef))
+    z_smooth = x[:, :, 0]
+    z_dy = x[:, :, 1] / dy
+    z_dx = x[:, :, 2] / dx
+
+    return z_smooth, z_dy, z_dx
+
+
+def _run_IRLS(Z, G, half_sizes, ftol, maxiter, coord):
+    """ Iterative Reweighted Least Squares to minimize the L1 norm 
+    for a window surrounding a pixel. --> ||Gx-d||_1
+
+    Paramters
+    ---------
+    Z : array_like
+        2-dimensional array of data with padding
+    G : array_like
+        2-dimensional design matrix of shape (window_size^2, ncoef)
+    half_sizes: tuple of ints
+        half the window length in both directions (half_size_y, half_size_x).
+    ftol : float
+        accepted mean residual stopping point
+    maxiter : int
+        maximum number of iterations of IRLS when approximating the L1 norm.
+        Setting maxiter to 0 will return the coefficient solution to minimizing
+        the L2-norm.
+    coord : tuple
+        the (x, y) coordinate in Z representing the data point around which
+        to create the window
+    
+    Returns
+    -------
+    x : array_like
+        1-dimensional array of coefficients of the polynomial fit that
+        minimizes the L1-norm ||Gx-d||_1 where (0, 0) represents the relative
+        position of the coordinate at the center of the window.
+
+        In the window's relative coordinate system, (0, 0) represents the
+        center point of interest. This is neat because it allows for easy 
+        evaluation of the smoothed value as well as higher x and y 
+        derivatives of z.
+
+        Ex. coefs = [a0, a1, a2]
+        z = a0 + a1*y + a2*x
+        smooth  @ (0, 0) = a0
+        dz/dy   @ (0, 0) = a1
+        dz/dx   @ (0, 0) = a2
+        etc...
     """
-    if w % 2 == 0:
-        w += 1
-    return w
+    # Don't fit if the center coordinate is nan
+    if np.isnan(Z[coord]):
+        return [np.nan]*len(G[0])
+
+    # Calculate window bounds
+    half_size_y, half_size_x = half_sizes
+    rstart, rend = coord[0] - half_size_y, coord[0] + half_size_y + 1
+    cstart, cend = coord[1] - half_size_x, coord[1] + half_size_x + 1
+
+    # Get sub-window of data surrounding coordinate
+    d = Z[rstart:rend, cstart:cend].ravel()
+
+    # Ignore any nan values
+    nan_mask = np.isnan(d)
+    if (len(nan_mask) > 0):
+        G = np.delete(G, nan_mask, axis=0)
+        d = np.delete(d, nan_mask)
+
+    # x is solution coefficient matrix
+    x = np.matmul(np.linalg.pinv(G), d)
+
+    # Approximate the L1 norm using IRLS
+    for _ in range(maxiter):
+        # Calculate residual
+        res = np.matmul(G,x) - d
+
+        if np.mean(res) < ftol:
+            break # Good enough solution achieved
+
+        # weights vector for L1 approximation
+        w = abs(res)**(-0.5)
+        W = np.diag(w/sum(w))
+        WG = np.matmul(W, G)
+
+        try:
+            # New approximate coefficient solution
+            x, _, _, _ = np.linalg.lstsq(np.matmul(WG.T, WG),
+                np.matmul(np.matmul(WG.T, W), d))
+        except:
+            # Break if solution can't be found (ie residuals become too small)
+            break
+
+    return x
 
 
 def _sgolay2d(z, window_size, order, derivative=None):
     """
-    Original lower-level code from Scipy cookbook.
+    Max Filter, January 2021.
+
+    Original lower-level code from Scipy cookbook, with modifications to
+    padding.
     """
     from scipy.signal import fftconvolve
 
     # number of terms in the polynomial expression
     n_terms = ( order + 1 ) * ( order + 2)  / 2.0
 
-    if  window_size % 2 == 0:
-        raise ValueError('window_size must be odd')
-
     if window_size**2 < n_terms:
         raise ValueError('order is too high for the window size')
 
     half_size = window_size // 2
 
-    # exponents of the polynomial.
-    # p(x,y) = a0 + a1*x + a2*y + a3*x^2 + a4*y^2 + a5*x*y + ...
-    # this line gives a list of two item tuple. Each tuple contains
+    # exponents of the polynomial. 
+    # p(x,y) = a0 + a1*x + a2*y + a3*x^2 + a4*y^2 + a5*x*y + ... 
+    # this line gives a list of two item tuple. Each tuple contains 
     # the exponents of the k-th term. First element of tuple is for x
     # second element for y.
     # Ex. exps = [(0,0), (1,0), (0,1), (2,0), (1,1), (0,2), ...]
@@ -283,51 +454,77 @@ def _sgolay2d(z, window_size, order, derivative=None):
         A[:,i] = (dx**exp[0]) * (dy**exp[1])
 
     # pad input array with appropriate values at the four borders
-    new_shape = z.shape[0] + 2*half_size, z.shape[1] + 2*half_size
-    Z = np.zeros( (new_shape) )
-    # top band
-    band = z[0, :]
-    Z[:half_size, half_size:-half_size] =  band -  np.abs( np.flipud( z[1:half_size+1, :] ) - band )
-    # bottom band
-    band = z[-1, :]
-    Z[-half_size:, half_size:-half_size] = band  + np.abs( np.flipud( z[-half_size-1:-1, :] )  -band )
-    # left band
-    band = np.tile( z[:,0].reshape(-1,1), [1,half_size])
-    Z[half_size:-half_size, :half_size] = band - np.abs( np.fliplr( z[:, 1:half_size+1] ) - band )
-    # right band
-    band = np.tile( z[:,-1].reshape(-1,1), [1,half_size] )
-    Z[half_size:-half_size, -half_size:] =  band + np.abs( np.fliplr( z[:, -half_size-1:-1] ) - band )
-    # central band
-    Z[half_size:-half_size, half_size:-half_size] = z
-
-    # top left corner
-    band = z[0,0]
-    Z[:half_size,:half_size] = band - np.abs( np.flipud(np.fliplr(z[1:half_size+1,1:half_size+1]) ) - band )
-    # bottom right corner
-    band = z[-1,-1]
-    Z[-half_size:,-half_size:] = band + np.abs( np.flipud(np.fliplr(z[-half_size-1:-1,-half_size-1:-1]) ) - band )
-
-    # top right corner
-    band = Z[half_size,-half_size:]
-    Z[:half_size,-half_size:] = band - np.abs( np.flipud(Z[half_size+1:2*half_size+1,-half_size:]) - band )
-    # bottom left corner
-    band = Z[-half_size:,half_size].reshape(-1,1)
-    Z[-half_size:,:half_size] = band - np.abs( np.fliplr(Z[-half_size:, half_size+1:2*half_size+1]) - band )
+    Z = np.pad(z, half_size, mode='reflect')
 
     # solve system and convolve
     if derivative == None:
         m = np.linalg.pinv(A)[0].reshape((window_size, -1))
-        return fftconvolve(Z, m, mode='valid')
+        Zf = fftconvolve(Z, m, mode='valid')
+        return Zf
     elif derivative == 'col':
         c = np.linalg.pinv(A)[1].reshape((window_size, -1))
-        return fftconvolve(Z, -c, mode='valid')
+        Zc = fftconvolve(Z, -c, mode='valid')
+        return Zc
     elif derivative == 'row':
         r = np.linalg.pinv(A)[2].reshape((window_size, -1))
-        return fftconvolve(Z, -r, mode='valid')
+        Zr = fftconvolve(Z, -r, mode='valid')
+        return Zr
     elif derivative == 'both':
         c = np.linalg.pinv(A)[1].reshape((window_size, -1))
         r = np.linalg.pinv(A)[2].reshape((window_size, -1))
-        return fftconvolve(Z, -r, mode='valid'), fftconvolve(Z, -c, mode='valid')
+        Zc = fftconvolve(Z, -c, mode='valid')
+        Zr = fftconvolve(Z, -r, mode='valid')
+        return Zr, Zc
+
+
+def _compute_windows(window_size, spacing):
+    """
+    Convenience function to compute window sizes in pixels given spacing of
+    pixels in physical coordinates.
+
+    Parameters
+    ----------
+    spacing: scalar or tuple of scalars
+        Spacing between pixels along axis. If tuple, each element specifies
+        spacing along different axes.
+    window_size: scalar or tuple of scalars
+        Window size in units of specified spacing. If tuple provided, window size is
+        specified as (win_y, win_x).
+
+    Returns
+    -------
+    w: tuple of scalars
+        Odd-number window sizes in both axes directions in number of pixels.
+    """
+    # Unpack spacing
+    if isinstance(spacing, (tuple, list)):
+        assert len(spacing) == 2, 'Spacing must be 2-element tuple.'
+        dy, dx = spacing
+    else:
+        dy = dx = spacing
+
+    # Compute window sizes
+    if isinstance(window_size, (tuple, list)):
+        assert len(window_size) == 2, 'Window size must be 2-element tuple.'
+        wy, wx = window_size
+    else:
+        wy = wx = window_size
+    wy, wx = int(np.ceil(abs(wy / dy))), int(np.ceil(abs(wx / dx)))
+
+    # Ensure odd windows
+    wy = _make_odd(wy)
+    wx = _make_odd(wx)
+
+    return wy, wx
+
+
+def _make_odd(w):
+    """
+    Convenience function to ensure a number is odd.
+    """
+    if w % 2 == 0:
+        w += 1
+    return w
 
 
 # end of file
