@@ -6,6 +6,8 @@ from functools import partial
 from multiprocessing import Pool
 import sys
 
+from .raster import inpaint
+
 # TODO:
 # 1) Routine for filling NaNs, probably with inpainting of some sort
 # 2) Computation, storing, and application of NaN masks
@@ -142,7 +144,7 @@ def compute_stress_strain(vx, vy, dx=100, dy=-100, grad_method='numpy',
     return strain_dict, stress_dict
 
 
-def gradient(z, spacing=1.0, axis=None, method='numpy', **kwargs):
+def gradient(z, spacing=1.0, axis=None, remask=True, method='numpy', **kwargs):
     """
     Calls either Numpy or Savitzky-Golay gradient computation routines.
 
@@ -156,6 +158,8 @@ def gradient(z, spacing=1.0, axis=None, method='numpy', **kwargs):
     axis: None or int or tuple of ints, optional
         Axis or axes to compute gradient. If None, derivative computed along all
         dimensions. Default: 0.
+    remask: bool, optional
+        Apply NaN mask on gradients. Default: True.
     method: str, optional
         Method specifier in ('numpy', 'sgolay', 'robust'). Default: 'numpy'.
     **kwargs:
@@ -167,17 +171,36 @@ def gradient(z, spacing=1.0, axis=None, method='numpy', **kwargs):
         Set of ndarrays (or single ndarry for only one axis) with same shape as z
         corresponding to the derivatives of z with respect to each axis.
     """
+    # Mask mask of NaNs
+    nan_mask = np.isnan(z)
+    have_nan = np.any(nan_mask)
+
+    # For numpy and sgolay methods, we need to inpaint if NaNs detected
+    if have_nan and method in ('numpy', 'sgolay'):
+        z_inp = inpaint(z, mask=nan_mask)
+    else:
+        z_inp = z
+
+    # Compute gradient
     if method == 'numpy':
-        s = np.gradient(z, spacing, axis=axis, edge_order=2)
+        s = np.gradient(z_inp, spacing, axis=axis, edge_order=2)
     elif method == 'sgolay':
-        s = sgolay_gradient(z, spacing=spacing, axis=axis, **kwargs)
+        s = sgolay_gradient(z_inp, spacing=spacing, axis=axis, **kwargs)
     elif method == 'robust':
-        zs, z_dy, z_dx = robust_gradient(z, spacing=spacing, **kwargs)
+        zs, z_dy, z_dx = robust_gradient(z_inp, spacing=spacing, **kwargs)
         s = (z_dy, z_dx)
         if axis is not None and isinstance(axis, int):
             s = s[axis]
     else:
         raise ValueError('Unsupported gradient method.')
+
+    # Re-apply mask
+    if remask and have_nan:
+        if isinstance(s, tuple):
+            for arr in s:
+                arr[nan_mask] = np.nan
+        else:
+            s[nan_mask] = np.nan
 
     return s
 

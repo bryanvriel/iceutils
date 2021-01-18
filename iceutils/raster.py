@@ -1315,6 +1315,49 @@ def griddata(x, y, z, dx, dy, x_extent=None, y_extent=None, method='linear', eps
 
     return raster
 
+def inpaint(raster, mask=None, method='biharmonic'):
+    """
+    Inpaint a raster at NaN values or with an input mask.
+
+    Parameters
+    ----------
+    raster: Raster or ndarray
+        Input raster or array object to inpaint.
+    mask: None or ndarry, optional
+        Mask with same shape as raster specifying pixels to inpaint. If None,
+        mask computed from NaN values. Default: None.
+    method: str, optional
+        Inpainting method from ('biharmonic', 'telea'). Default: 'biharmonic'.
+
+    Returns
+    -------
+    out_raster: Raster
+        Output raster object.
+    """
+    if isinstance(raster, Raster):
+        rdata = raster.data
+    else:
+        rdata = raster
+
+    # Create mask
+    if mask is None:
+        mask = np.isnan(rdata)
+    else:
+        assert mask.shape == rdata.shape, 'Mask and raster shape mismatch.'
+
+    # Call inpainting
+    if method == 'biharmonic':
+        from skimage.restoration.inpaint import inpaint_biharmonic
+        inpainted = inpaint_biharmonic(rdata, mask, multichannel=False)
+    else:
+        raise ValueError('Unsupported inpainting method.')
+
+    # Return new raster or array
+    if isinstance(raster, Raster):
+        return Raster(data=inpainted, hdr=raster.hdr)
+    else:
+        return inpainted
+        
 def render_kml(raster, filename, dpi=300, cmap='viridis', clim=None, colorbar=False, n_proc=1):
     """
     Renders Raster data to an image and creates a KML for viewing in Google Earth.
