@@ -30,6 +30,8 @@ def parse():
         help='Minimum number of observations to perform inversion. Default: 20.')
     parser.add_argument('-n_proc', action='store', type=int, default=1,
         help='Number of processors for multiprocessing. Default: 1.')
+    parser.add_argument('-prior_cov', action='store_true',
+        help='Use prior covariance matrix function defined in time collection file.')
     parser.add_argument('-no_weights', action='store_true',
         help='Do not use data weights during the inversion.')
     parser.add_argument('-mask', action='store', type=str, default=None,
@@ -55,8 +57,8 @@ def main(args):
     ice.tseries.inversion(stack, args.user, args.outdir, nt_out=args.interp, dkey=args.dkey,
                           solver_type=args.solver, n_proc=args.n_proc, regParam=args.penalty,
                           rw_iter=args.rw_iter, n_min=args.n_min, no_weights=args.no_weights,
-                          mask_raster=args.mask, cleaned_stack=args.cleaned_stack,
-                          n_iter=args.n_iter)
+                          prior_cov=args.prior_cov, mask_raster=args.mask,
+                          cleaned_stack=args.cleaned_stack, n_iter=args.n_iter)
     
 if __name__ == '__main__':
     # Parse command line arguments
