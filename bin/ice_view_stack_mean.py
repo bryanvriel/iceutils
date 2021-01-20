@@ -59,7 +59,7 @@ def main(args):
 
     if args.save is not None:
         out = ice.Raster(data=mean, hdr=stack.hdr)
-        out.write_gdal(args.save, epsg=3413)
+        out.write_gdal(args.save)
 
 
 if __name__ == '__main__':
