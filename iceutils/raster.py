@@ -1075,8 +1075,7 @@ def warp(raster, target_epsg=None, target_srs=None, source_srs=None,
 
     # Create target projection
     if target_epsg is None:
-        if target_hdr is not None:
-            assert target_hdr.epsg is not None, 'No EPSG information found for target raster.'
+        if target_hdr is not None and target_hdr.epsg is not None:
             trg_proj = pyproj.Proj('EPSG:%d' % target_hdr.epsg)
         elif target_srs is not None:
             trg_proj = pyproj.Proj(target_srs)
