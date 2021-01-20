@@ -19,11 +19,15 @@ from .model import build_temporal_model, build_temporal_model_fromfile
 def inversion(stack, userfile, outdir, cleaned_stack=None,
               solver_type='lsqr', dkey='data', nt_out=200, n_proc=8, regParam=1.0,
               rw_iter=1, robust=False, n_nonzero_coefs=10, n_min=20, n_iter=1,
-              no_weights=False, mask_raster=None):
+              no_weights=False, prior_cov=True, mask_raster=None):
 
     # Create a time series model defined at the data points
-    data_model, Cm = build_temporal_model_fromfile(stack.tdec, userfile, cov=True)
-    regMat = np.linalg.inv(Cm)
+    if prior_cov:
+        data_model, Cm = build_temporal_model_fromfile(stack.tdec, userfile, cov=prior_cov)
+        regMat = np.linalg.inv(Cm)
+    else:
+        data_model = build_temporal_model_fromfile(stack.tdec, userfile, cov=prior_cov)
+        regMat = None
     # Cache the design matrix
     G = data_model.G
 
