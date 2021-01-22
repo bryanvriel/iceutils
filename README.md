@@ -12,10 +12,10 @@ scikit-learn
 scikit-image
 tqdm
 pint
+opencv
 cvxopt (optional)
-opencv (optional)
 ```
-All of the packages can be installed via Anaconda using the `conda-forge` channel. Also note that the packages `cvxopt` and `opencv` are optional and only used for the `iceutils.tseries` and `iceutils.correlate` modules, respectively. The installation process can be streamlined by copying those packages into a `requirements.txt` file and running:
+All of the packages can be installed via Anaconda using the `conda-forge` channel. Also note that the package `cvxopt` is optional and only used for the `iceutils.tseries` module. The installation process can be streamlined by copying those packages into a `requirements.txt` file and running:
 ```
 conda install -c conda-forge --file requirements.txt
 ```
