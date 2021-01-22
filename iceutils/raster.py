@@ -108,7 +108,7 @@ class Raster:
 
         # Load raster data and do any subsetting using GDAL directly
         if rasterfile is not None:
-            self.data, self.hdr = self.load_gdal(filename, band=band, projWin=projWin,
+            self.data, self.hdr = self.load_gdal(rasterfile, band=band, projWin=projWin,
                                                  islice=islice, jslice=jslice, **gdalOpts)
         elif stackfile is not None:
             assert h5path is not None
