@@ -73,16 +73,52 @@ class Boundary:
         raise ValueError('Cannot set y-points')
 
 
-def smoothe_line(x, y, n=200, s=1.0, scale=1.0):
+def smoothe_line(x, y, path_smooth=False, n=200, s=1.0, scale=1.0):
     """
     Smoothe a horizontal line with a smoothing spline.
+
+    Parameters
+    ----------
+    x: (N,) ndarray
+        Array of X-coordinates.
+    y: (N,) ndarray
+        Array of Y-coordinates.
+    path_smooth: bool, optional
+        Compute path length and use as independent coordinate for smoothing. Useful
+        for irregular lines with non-monotonic X-coordinates. Default: False.
+    n: int, optional
+        Number of evenly spaced points for output line. Default: 200.
+    s: float, optional
+        Spline smoothing factor. Default: 1.0.
+    scale: float, optional
+        Pre-scaling factor. Useful for reducing data dynamic range. Default: 1.0.
+
+    Returns
+    -------
+    xs: (n,) ndarray
+        Smoothed X-coordinates.
+    ys: (n,) ndarray
+        Smoothed Y-coordinates.
     """
-    # Uniform grid for x coordinates
-    xgrid = scale*np.linspace(x[0], x[-1], n)
-    # Spline smoothing
-    spline = UnivariateSpline(scale*x, scale*y, s=s)
-    # Evaluate spline
-    ygrid = spline(xgrid)
+    if path_smooth:
+
+        # Path coordinates
+        sp = compute_path_length(scale*x, scale*y)
+        sgrid = np.linspace(sp[0], sp[-1], n)
+
+        # Smooth X
+        spline = UnivariateSpline(sp, x, s=s)
+        xgrid = spline(sgrid)
+
+        # Smooth Y
+        spline = UnivariateSpline(sp, y, s=s)
+        ygrid = spline(sgrid)
+
+    else:
+        xgrid = scale*np.linspace(x[0], x[-1], n)
+        spline = UnivariateSpline(scale*x, scale*y, s=s)
+        ygrid = spline(xgrid)
+
     # Done
     return xgrid/scale, ygrid/scale
 
