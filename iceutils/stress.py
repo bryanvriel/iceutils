@@ -6,24 +6,63 @@ from functools import partial
 from multiprocessing import Pool
 import sys
 
-from .raster import inpaint
+from .raster import inpaint as _inpaint
 
-# TODO:
-# 1) Routine for filling NaNs, probably with inpainting of some sort
-# 2) Computation, storing, and application of NaN masks
-
-def compute_stress_strain(vx, vy, dx=100, dy=-100, grad_method='numpy',
-                          h=None, b=None, AGlen=None, rho_ice=917.0, g=9.80665, rotate=False,
+def compute_stress_strain(vx, vy, dx=100, dy=-100, grad_method='numpy', inpaint=True, rotate=False,
+                          h=None, b=None, AGlen=None, rho_ice=917.0, g=9.80665,
                           n=3, **kwargs):
     """
     Compute stress and strain fields and return in dictionaries.
+
+    Parameters
+    ----------
+    vx: (M, N) ndarray
+        Input array for velocities in X-direction.
+    vy: (M, N) ndarray
+        Input array for velocities in Y-direction.
+    dx: float, optional
+        Spacing in X-direction.
+    dy: float, optional
+        Spacing in Y-direction.
+    grad_method: str, optional
+        Gradient method specifier in ('numpy', 'sgolay', 'robust'). Default: 'numpy'.
+    inpaint: bool, optional
+        Inpaint arrays prior to gradient computation. Default: True.
+    rotate: bool, optional
+        Rotate velocity gradients to along-flow direction. Default: False.
+    h: (M, N) ndarray, optional
+        Input array of ice thickness for computing SSA stresses. Default: None.
+    b: (M, N) ndarray, optional
+        Input array of bed elevation for computing SSA stresses. Default: None.
+    AGlen: float, optional
+        Glen's flow law rate parameter in units of {a^-1} {Pa^-3}. Default: None.
+    rho_ice: float, optional
+        Density of ice in kg/m^3. Default: 917.0
+    g: float, optional
+        Gravitational constant. Default: 9.80665
+    n: int, optional
+        Glen's flow law exponent. Default: 3.
+    **kwargs:
+        Extra keyword arguments to pass to gradient computation. 
+
+    Returns
+    -------
+    strain_dict: dict
+        Dictionary of (M, N) arrays containing strain components 'e_xx', 'e_yy', 'e_xy',
+        'dilatation', 'effective'.
+    stress_dict: dict
+        Dictionary of (M, N) arrays containing stress components 't_xx', 't_yy', 't_xy'.
+        Also contains effective dynamic viscosity 'eta'. If thickness and bed are
+        provided, also contains SSA stresses 'tmxx', 'tmxy', 'tmyx', 'tdx', 'tdy', where
+        the first three are membrane stresses and the last two are driving stresses.
+    
     """
     # Cache image shape
     Ny, Nx = vx.shape
 
     # Compute velocity gradients
-    L12, L11 = gradient(vx, spacing=(dy, dx), method=grad_method, **kwargs)
-    L22, L21 = gradient(vy, spacing=(dy, dx), method=grad_method, **kwargs)
+    L12, L11 = gradient(vx, spacing=(dy, dx), method=grad_method, inpaint=inpaint, **kwargs)
+    L22, L21 = gradient(vy, spacing=(dy, dx), method=grad_method, inpaint=inpaint, **kwargs)
 
     # Compute components of strain-rate tensor
     D = np.empty((2, 2, vx.size))
@@ -89,25 +128,27 @@ def compute_stress_strain(vx, vy, dx=100, dy=-100, grad_method='numpy',
 
     # Create stress dictionary
     stress_dict = {'eta': eta,
-                   'txx': txx,
-                   'txy': 0.5 * (txy + tyx),
-                   'tyy': tyy}
+                   't_xx': txx,
+                   't_xy': 0.5 * (txy + tyx),
+                   't_yy': tyy}
 
     # Compute SSA stress components if thickness and bed provided
     if h is not None:
 
-        # Compute thickness gradients
-        h_x = gradient(h, dx, axis=1, method=grad_method, **kwargs)
-        h_y = gradient(h, dy, axis=0, method=grad_method, **kwargs)
-
         # For surface, add bed if it exists to compute driving stress
         if b is not None:
             s = h + b
-            s_x = gradient(s, dx, axis=1, method=grad_method, **kwargs)
-            s_y = gradient(s, dy, axis=0, method=grad_method, **kwargs)
+            s_x = gradient(s, dx, axis=1, method=grad_method, inpaint=inpaint,
+                           remask=False, **kwargs)
+            s_y = gradient(s, dy, axis=0, method=grad_method, inpaint=inpaint,
+                           remask=False, **kwargs)
+
+        # Otherwise, compute thickness gradients as surface gradients
         else:
-            s_x = h_x
-            s_y = h_y
+            s_x = gradient(h, dx, axis=1, method=grad_method, inpaint=inpaint,
+                           remask=False, **kwargs)
+            s_y = gradient(h, dy, axis=0, method=grad_method, inpaint=inpaint,
+                           remask=False, **kwargs)
 
         # Membrane stresses
         tmxx = gradient(h * (2 * txx + tyy), dx, axis=1, method=grad_method, **kwargs)
@@ -144,7 +185,8 @@ def compute_stress_strain(vx, vy, dx=100, dy=-100, grad_method='numpy',
     return strain_dict, stress_dict
 
 
-def gradient(z, spacing=1.0, axis=None, remask=True, method='numpy', **kwargs):
+def gradient(z, spacing=1.0, axis=None, remask=True, method='numpy',
+             inpaint=True, **kwargs):
     """
     Calls either Numpy or Savitzky-Golay gradient computation routines.
 
@@ -162,6 +204,9 @@ def gradient(z, spacing=1.0, axis=None, remask=True, method='numpy', **kwargs):
         Apply NaN mask on gradients. Default: True.
     method: str, optional
         Method specifier in ('numpy', 'sgolay', 'robust'). Default: 'numpy'.
+    inpaint: bool, optional
+        Inpaint image prior to gradient computation (recommended for
+        'numpy' and 'sgolay' methods). Default: True.
     **kwargs:
         Extra keyword arguments to pass to specific gradient computation.
 
@@ -176,21 +221,29 @@ def gradient(z, spacing=1.0, axis=None, remask=True, method='numpy', **kwargs):
     have_nan = np.any(nan_mask)
 
     # For numpy and sgolay methods, we need to inpaint if NaNs detected
-    if have_nan and method in ('numpy', 'sgolay'):
-        z_inp = inpaint(z, mask=nan_mask)
+    if inpaint and have_nan:
+        z_inp = _inpaint(z, mask=nan_mask)
     else:
         z_inp = z
 
-    # Compute gradient
+    # Compute gradient with numpy
     if method == 'numpy':
-        s = np.gradient(z_inp, spacing, axis=axis, edge_order=2)
+        if isinstance(spacing, (tuple, list)):
+            s = np.gradient(z_inp, spacing[0], spacing[1], axis=(0, 1), edge_order=2)
+        else:
+            s = np.gradient(z_inp, spacing, axis=axis, edge_order=2)
+
+    # With Savtizky-Golay
     elif method == 'sgolay':
         s = sgolay_gradient(z_inp, spacing=spacing, axis=axis, **kwargs)
+
+    # With robust polynomial
     elif method == 'robust':
         zs, z_dy, z_dx = robust_gradient(z_inp, spacing=spacing, **kwargs)
         s = (z_dy, z_dx)
         if axis is not None and isinstance(axis, int):
             s = s[axis]
+
     else:
         raise ValueError('Unsupported gradient method.')
 
@@ -409,7 +462,7 @@ def _run_IRLS(Z, G, half_sizes, ftol, maxiter, coord):
     d = Z[rstart:rend, cstart:cend].ravel()
 
     # Ignore any nan values
-    nan_mask = np.isnan(d)
+    nan_mask = np.isnan(d).nonzero()[0]
     if (len(nan_mask) > 0):
         G = np.delete(G, nan_mask, axis=0)
         d = np.delete(d, nan_mask)
