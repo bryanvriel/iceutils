@@ -2,6 +2,8 @@
 
 import numpy as np
 from scipy.ndimage.interpolation import map_coordinates
+from skimage.restoration.inpaint import inpaint_biharmonic
+import cv2 as cv
 import warnings
 import pyproj
 import h5py
@@ -1314,7 +1316,7 @@ def griddata(x, y, z, dx, dy, x_extent=None, y_extent=None, method='linear', eps
 
     return raster
 
-def inpaint(raster, mask=None, method='biharmonic'):
+def inpaint(raster, mask=None, method='telea', r=3.0):
     """
     Inpaint a raster at NaN values or with an input mask.
 
@@ -1326,7 +1328,9 @@ def inpaint(raster, mask=None, method='biharmonic'):
         Mask with same shape as raster specifying pixels to inpaint. If None,
         mask computed from NaN values. Default: None.
     method: str, optional
-        Inpainting method from ('biharmonic', 'telea'). Default: 'biharmonic'.
+        Inpainting method from ('telea', 'biharmonic'). Default: 'telea'.
+    r: scalar, optional
+        Radius in pixels of neighborhood for OpenCV inpainting. Default: 3.0.
 
     Returns
     -------
@@ -1345,8 +1349,10 @@ def inpaint(raster, mask=None, method='biharmonic'):
         assert mask.shape == rdata.shape, 'Mask and raster shape mismatch.'
 
     # Call inpainting
-    if method == 'biharmonic':
-        from skimage.restoration.inpaint import inpaint_biharmonic
+    if method == 'telea': 
+        umask = mask.astype(np.uint8)
+        inpainted = cv.inpaint(rdata, umask, r, cv.INPAINT_TELEA)
+    elif method == 'biharmonic': 
         inpainted = inpaint_biharmonic(rdata, mask, multichannel=False)
     else:
         raise ValueError('Unsupported inpainting method.')
