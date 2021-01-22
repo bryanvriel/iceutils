@@ -144,8 +144,12 @@ def inversion(stack, userfile, outdir, cleaned_stack=None,
         # Optional saving of cleaned stack
         if cleaned_stack is not None:
             # First transfer 1d arrays to original 2d chunks
-            data2d[:, chunk_mask] = data
-            wgts2d[:, chunk_mask] = wgts
+            if stack.fmt == 'NHW':
+                data2d[:, chunk_mask] = data
+                wgts2d[:, chunk_mask] = wgts
+            else:
+                data2d[chunk_mask, :] = data.T
+                wgts2d[chunk_mask, :] = wgts.T
             # Write to output stack
             clean_stack.set_chunk(islice, jslice, data2d, key='data')
             clean_stack.set_chunk(islice, jslice, wgts2d, key='weights')
