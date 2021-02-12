@@ -107,11 +107,11 @@ def smoothe_line(x, y, path_smooth=False, n=200, s=1.0, scale=1.0):
         sgrid = np.linspace(sp[0], sp[-1], n)
 
         # Smooth X
-        spline = UnivariateSpline(sp, x, s=s)
+        spline = UnivariateSpline(sp, scale*x, s=s)
         xgrid = spline(sgrid)
 
         # Smooth Y
-        spline = UnivariateSpline(sp, y, s=s)
+        spline = UnivariateSpline(sp, scale*y, s=s)
         ygrid = spline(sgrid)
 
     else:
