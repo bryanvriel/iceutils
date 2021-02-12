@@ -25,6 +25,8 @@ def parse():
         help='Color limits for display.')
     parser.add_argument('-save', action='store', type=str, default=None,
         help='Save mean image to raster. Default: None.')
+    parser.add_argument('-save_epsg', action='store', type=int, default=None,
+        help='Override EPSG for saving mean raster. Default: None.')
     return parser.parse_args()
 
 def main(args):
@@ -59,7 +61,7 @@ def main(args):
 
     if args.save is not None:
         out = ice.Raster(data=mean, hdr=stack.hdr)
-        out.write_gdal(args.save)
+        out.write_gdal(args.save, epsg=args.save_epsg)
 
 
 if __name__ == '__main__':
