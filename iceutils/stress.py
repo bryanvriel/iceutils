@@ -151,10 +151,14 @@ def compute_stress_strain(vx, vy, dx=100, dy=-100, grad_method='numpy', inpaint=
                            remask=False, **kwargs)
 
         # Membrane stresses
-        tmxx = gradient(h * (2 * txx + tyy), dx, axis=1, method=grad_method, **kwargs)
-        tmxy = gradient(h * 0.5 * (txy + tyx), dy, axis=0, method=grad_method, **kwargs)
-        tmyy = gradient(h * (2 * tyy + txx), dy, axis=0, method=grad_method, **kwargs)
-        tmyx = gradient(h * 0.5 * (txy + tyx), dx, axis=1, method=grad_method, **kwargs)
+        tmxx = gradient(h * (2 * txx + tyy), dx, axis=1, method=grad_method,
+                        inpaint=inpaint, **kwargs)
+        tmxy = gradient(h * 0.5 * (txy + tyx), dy, axis=0, method=grad_method,
+                        inpaint=inpaint, **kwargs)
+        tmyy = gradient(h * (2 * tyy + txx), dy, axis=0, method=grad_method,
+                        inpaint=inpaint, **kwargs)
+        tmyx = gradient(h * 0.5 * (txy + tyx), dx, axis=1, method=grad_method,
+                        inpaint=inpaint, **kwargs)
 
         # Driving stresses
         tdx = -1.0 * rho_ice * g * h * s_x
