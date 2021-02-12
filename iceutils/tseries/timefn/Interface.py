@@ -219,7 +219,7 @@ def getFunctionTypes(collection):
     reg = []
     for cnt, basis in enumerate(collection.data):
 
-        if basis.fnname in ['Constant', 'Linear']:
+        if basis.fnname in ['Constant', 'Linear', 'Quadratic', 'Cubic', 'Quartic', 'Power']:
             secular.append(cnt)
         elif basis.fnname in ['Cos', 'Sin']:
             seasonal.append(cnt)
