@@ -293,23 +293,29 @@ class Raster:
 
         return
 
-    def downsample(self, factor=2):
+    def downsample(self, factor=2, func=np.mean, cval=0.0):
         """
-        Downsamples raster data in-place by an integer factor.
+        Downsamples raster data in-place by an integer factor using local reduction
+        defined by provided function. Calls skimage.measure.block_reduce.
 
         Parameters
         ----------
         factor: int, optional
             Downsampling factor. Default: 2.
+        func: callable, optional
+            Function object which is used to calculate the return value for each local block.
+            Default: numpy.mean.
+        cval: float, optional
+            Constant padding value if image is not perfectly divisible by the integer factors.
 
         Returns
         -------
         None
         """
-        from skimage.transform import downscale_local_mean
+        from skimage.measure import block_reduce
 
-        # Perform downscaling via local mean
-        self.data = downscale_local_mean(self.data, (factor, factor))
+        # Perform downscaling
+        self.data = block_reduce(self.data, (factor, factor), func, cval)
 
         # Create new header
         X, Y = [arr[::factor, ::factor] for arr in self.hdr.meshgrid()]
