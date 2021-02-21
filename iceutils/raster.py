@@ -7,8 +7,7 @@ import cv2 as cv
 import warnings
 import pyproj
 import h5py
-import gdal
-import osr
+from osgeo import gdal, osr
 import sys
 
 from .boundary import transform_coordinates
