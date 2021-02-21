@@ -206,9 +206,9 @@ def load_kml(kmlfile, out_epsg=4326):
             lon = np.zeros(N)
             lat = np.zeros(N)
             for i, line in enumerate(lines):
-                x, y, z = [float(x) for x in line.split(',')]
-                lon[i] = x
-                lat[i] = y
+                values = [float(x) for x in line.split(',')]
+                lon[i] = values[0]
+                lat[i] = values[1]
 
     # Perform transformation if another EPSG is specified
     if out_epsg != 4326:
