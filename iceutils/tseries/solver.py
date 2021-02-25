@@ -109,7 +109,7 @@ def inversion(stack, userfile, outdir, cleaned_stack=None,
         shape = (len(tfit), npix)
         results = {}
         for key in ('full', 'secular', 'seasonal', 'transient', 'sigma'):
-            results[key] = pymp.array(shape, dtype=np.float32)
+            results[key] = pymp.full(shape, np.nan, dtype=np.float32)
 
         # Loop over pixels in chunk in parallel
         with pymp.Parallel(n_proc, manager) as parallel:
