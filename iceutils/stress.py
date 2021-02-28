@@ -253,7 +253,7 @@ def gradient(z, spacing=1.0, axis=None, remask=True, method='numpy',
 
     # Re-apply mask
     if remask and have_nan:
-        if isinstance(s, tuple):
+        if isinstance(s, (tuple, list)):
             for arr in s:
                 arr[nan_mask] = np.nan
         else:
