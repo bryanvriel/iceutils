@@ -35,6 +35,7 @@ import multiprocessing as _multiprocessing
 import warnings as _warnings                                                                   
 import os as _os
 import platform as _platform
+import signal as _signal
 import sys as _sys
 import time as _time
 
@@ -46,8 +47,6 @@ except ImportError:  # pragma: no cover
     _NP_AVAILABLE = False
 
 _NUM_PROCS = _multiprocessing.Value("i", 1, lock=False)  # pylint: disable=no-member
-_LOCK = _multiprocessing.Lock()
-_PRINT_LOCK = _multiprocessing.Lock()
 
 from . import config as _config
 
@@ -89,6 +88,7 @@ class Parallel(object):
         self._pids = []
         self._thread_num = 0
         self._lock = None
+        self._print_lock = None
         if Parallel._global_master is None:
             Parallel._global_master = _os.getpid()
         # Set manager
@@ -112,6 +112,7 @@ class Parallel(object):
         # pylint: disable=global-statement
         assert len(self._pids) == 0, "A `Parallel` object may only be used once!"
         self._lock = _multiprocessing.Lock()
+        self._print_lock = _multiprocessing.Lock()
         # pylint: disable=protected-access
         if self._num_threads is None:
             assert (
@@ -131,7 +132,7 @@ class Parallel(object):
         Parallel._level += 1
         self._iter_queue = self._manager.Queue(maxsize=self._num_threads - 1)
         # pylint: disable=protected-access
-        with _LOCK:
+        with self._lock:
             # Make sure that max threads is not exceeded.
             if _config.thread_limit is not None:
                 # pylint: disable=protected-access
@@ -168,7 +169,7 @@ class Parallel(object):
             _LOGGER.debug("Waiting for process %d...", pid)
             _os.waitpid(pid, 0)
         # pylint: disable=protected-access
-        with _LOCK:
+        with self._lock:
             _NUM_PROCS.value -= len(self._pids)
         Parallel._level -= 1
         self._disposed = True
@@ -216,7 +217,7 @@ class Parallel(object):
     def print(cls, *args, **kwargs):
         """Print synchronized."""
         # pylint: disable=protected-access
-        with _PRINT_LOCK:
+        with self._print_lock:
             print(*args, **kwargs)
             _sys.stdout.flush()
 
