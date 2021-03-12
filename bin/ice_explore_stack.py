@@ -12,6 +12,8 @@ import os
 
 import iceutils as ice
 
+plt.rc('font', size=12)
+
 def parse():
     parser = argparse.ArgumentParser(description="""
         Explore time series tack""")
@@ -33,8 +35,8 @@ def parse():
         help='Color limits for display.')
     parser.add_argument('-sigma', action='store_true',
         help='Plot errobars using weights dataset.')
-    parser.add_argument('-frame', action='store', type=str, default='mean',
-        help='Type of stat to use for displaying map (mean, initial, final, std). Default: mean.')
+    parser.add_argument('-frame', action='store', type=str, default='initial',
+        help='Type of stat to use for displaying map (mean, initial, final, std). Default: initial.')
     return parser.parse_args()
 
 def main(args):
@@ -79,6 +81,8 @@ def main(args):
                         extent=stack.hdr.extent)
     im = ax.imshow(mean, aspect='auto', vmin=vmin, vmax=vmax, cmap=cmap,
                    extent=stack.hdr.extent, alpha=args.alpha)
+    cbar = plt.colorbar(im, ax=ax, pad=0.02)
+    cbar.set_label(args.key)
 
     # Initialize plot for time series for a given pixel
     pts, axts = plt.subplots(figsize=(10,6))
@@ -110,7 +114,7 @@ def main(args):
 
         if mstack is not None:
             fit = mstack.timeseries(xy=(x, y), key=args.mkey)
-            axts.plot(mstack.tdec, fit)
+            axts.plot(mstack.tdec, fit, 'o')
 
         axts.set_xlabel('Year')
         axts.set_ylabel('Velocity')
