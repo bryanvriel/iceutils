@@ -25,7 +25,8 @@ def compute_stress_strain(vx, vy, dx=100, dy=-100, grad_method='numpy', inpaint=
     dy: float, optional
         Spacing in Y-direction.
     grad_method: str, optional
-        Gradient method specifier in ('numpy', 'sgolay', 'robust'). Default: 'numpy'.
+        Gradient method specifier in ('numpy', 'sgolay', 'robust_l2', 'robust_lp').
+        Default: 'numpy'.
     inpaint: bool, optional
         Inpaint arrays prior to gradient computation. Default: True.
     rotate: bool, optional
@@ -190,7 +191,7 @@ def compute_stress_strain(vx, vy, dx=100, dy=-100, grad_method='numpy', inpaint=
 
 
 def gradient(z, spacing=1.0, axis=None, remask=True, method='numpy',
-             inpaint=True, **kwargs):
+             inpaint=False, **kwargs):
     """
     Calls either Numpy or Savitzky-Golay gradient computation routines.
 
@@ -210,7 +211,7 @@ def gradient(z, spacing=1.0, axis=None, remask=True, method='numpy',
         Method specifier in ('numpy', 'sgolay', 'robust'). Default: 'numpy'.
     inpaint: bool, optional
         Inpaint image prior to gradient computation (recommended for
-        'numpy' and 'sgolay' methods). Default: True.
+        'sgolay' method). Default: False.
     **kwargs:
         Extra keyword arguments to pass to specific gradient computation.
 
@@ -224,7 +225,7 @@ def gradient(z, spacing=1.0, axis=None, remask=True, method='numpy',
     nan_mask = np.isnan(z)
     have_nan = np.any(nan_mask)
 
-    # For numpy and sgolay methods, we need to inpaint if NaNs detected
+    # For sgolay method, we need to inpaint if NaNs detected
     if inpaint and have_nan:
         z_inp = _inpaint(z, mask=nan_mask)
     else:
@@ -242,8 +243,8 @@ def gradient(z, spacing=1.0, axis=None, remask=True, method='numpy',
         s = sgolay_gradient(z_inp, spacing=spacing, axis=axis, **kwargs)
 
     # With robust polynomial
-    elif method == 'robust':
-        zs, z_dy, z_dx = robust_gradient(z_inp, spacing=spacing, **kwargs)
+    elif method in ('robust_l2', 'robust_lp'):
+        zs, z_dy, z_dx = robust_gradient(z_inp, spacing=spacing, lsq_method=method, **kwargs)
         s = (z_dy, z_dx)
         if axis is not None and isinstance(axis, int):
             s = s[axis]
@@ -326,11 +327,11 @@ def sgolay_gradient(z, spacing=1.0, axis=None, window_size=3, order=4):
         return s / spacing
 
 
-def robust_gradient(z, spacing=1.0, window_size=3.0, order=2, ftol=1e-5,
-                    maxiter=9, njobs=None):
-    """ A robust filter that minimizes the L1 norm ||Gx-d||_1 for a 
-    window surrounding each pixel in a 2-dimensional array using the 
-    Iteratively Reweighed Least Squares (IRLS) method.
+def robust_gradient(z, spacing=1.0, window_size=3.0, order=2, ftol=1e-5, std_thresh=3,
+                    maxiter=9, lsq_method='robust_l2', njobs=None):
+    """ A robust filter that minimizes the misfit (Gx - d) using either iterative
+    least squares (outlier removal) or iterative re-weighted least squares for Lp-norm
+    approximation.
 
     The function is multiprocessed and is robust to Laplace or Gaussian 
     noise. NaN values are ignored when computing the IRLS optimization.
@@ -347,12 +348,17 @@ def robust_gradient(z, spacing=1.0, window_size=3.0, order=2, ftol=1e-5,
         specified as (win_y, win_x). Default: 3.
     order : int, optional
         Polynomial order for the robust fitting.
+    std_thresh : float, optional
+        Number of standard deviations above which defines outliers (for lsq_method='robust_l2').
+        Default: 3.0.
     ftol : float, optional
-        Accepted mean residual stopping point.
+        Accepted mean residual stopping point (for lsq_method='robust_lp').
     maxiter : int, optional
         Maximum number of iterations of IRLS when approximating the L1-norm.
         Setting maxiter to 0 will return the coefficient solution to minimizing
         the L2-norm.
+    lsq_method : str, optional
+        Least squares method ('robust_l2', 'robust_lp'). Default: 'robust_l2'.
     njobs : int or None, optional
         Number of processes to use. If None, os.cpu_count() is used. 
 
@@ -398,8 +404,15 @@ def robust_gradient(z, spacing=1.0, window_size=3.0, order=2, ftol=1e-5,
     Zx = np.arange(half_size_x, ncol + half_size_x)
     coords = product(Zy, Zx)
 
+    # Cache least squares method
+    if lsq_method == 'robust_l2':
+        func = partial(_run_ILS, Z, G, (half_size_y, half_size_x), std_thresh, maxiter)
+    elif lsq_method == 'robust_lp':
+        func = partial(_run_IRLS, Z, G, (half_size_y, half_size_x), ftol, maxiter)
+    else:
+        raise ValueError('Unsupported least squares method.')
+
     # Apply IRLS regression to each pixel in data
-    func = partial(_run_IRLS, Z, G, (half_size_y, half_size_x), ftol, maxiter)
     with Pool(processes=njobs) as p:
         x = list(p.map(func, coords))
 
@@ -495,6 +508,95 @@ def _run_IRLS(Z, G, half_sizes, ftol, maxiter, coord):
             # Break if solution can't be found (ie residuals become too small)
             break
 
+    return x
+
+
+def _run_ILS(Z, G, half_sizes, std_thresh, maxiter, coord):
+    """ Iterative Least Squares where outliers are removed in successive iterations.
+
+    Paramters
+    ---------
+    Z : array_like
+        2-dimensional array of data with padding
+    G : array_like
+        2-dimensional design matrix of shape (window_size^2, ncoef)
+    half_sizes: tuple of ints
+        half the window length in both directions (half_size_y, half_size_x).
+    std_thresh: float
+        Number of standard deviations above which defines outliers.
+    maxiter : int
+        maximum number of iterations of IRLS when approximating the L1 norm.
+        Setting maxiter to 0 will return the coefficient solution to minimizing
+        the L2-norm.
+    coord : tuple
+        the (x, y) coordinate in Z representing the data point around which
+        to create the window
+    
+    Returns
+    -------
+    x : array_like
+        1-dimensional array of coefficients of the polynomial fit that
+        minimizes the L2-norm ||Gx-d||_2 where (0, 0) represents the relative
+        position of the coordinate at the center of the window.
+
+        In the window's relative coordinate system, (0, 0) represents the
+        center point of interest. This is neat because it allows for easy 
+        evaluation of the smoothed value as well as higher x and y 
+        derivatives of z.
+
+        Ex. coefs = [a0, a1, a2]
+        z = a0 + a1*y + a2*x
+        smooth  @ (0, 0) = a0
+        dz/dy   @ (0, 0) = a1
+        dz/dx   @ (0, 0) = a2
+        etc...
+    """
+    # Cache number of parameters
+    N_par = G.shape[1]
+
+    # Don't fit if the center coordinate is nan
+    if np.isnan(Z[coord]):
+        return [np.nan]*len(G[0])
+
+    # Calculate window bounds
+    half_size_y, half_size_x = half_sizes
+    rstart, rend = coord[0] - half_size_y, coord[0] + half_size_y + 1
+    cstart, cend = coord[1] - half_size_x, coord[1] + half_size_x + 1
+
+    # Get sub-window of data surrounding coordinate
+    d = Z[rstart:rend, cstart:cend].ravel()
+
+    # Keep only finite arrays
+    fmask = np.isfinite(d)
+    Gf = G[fmask, :]
+    df = d[fmask]
+    if df.size < N_par:
+        return np.full(N_par, np.nan)
+
+    # Iterative least squares
+    for _ in range(maxiter):
+    
+        # Perform least squares
+        x = np.linalg.lstsq(Gf, df, rcond=None)[0]
+
+        # Calculate residual
+        res = np.dot(Gf, x) - df
+
+        # Detect outliers
+        std = np.std(res)
+        outliers = np.abs(res) > (std_thresh * std)
+        # Break if no outliers detected
+        n_outliers = np.sum(outliers)
+        if n_outliers == 0:
+            break
+
+        # Subset inliers
+        inliers = np.invert(outliers)
+        Gf = Gf[inliers, :]
+        df = df[inliers]
+        if df.size < N_par:
+            return np.full(N_par, np.nan)
+        
     return x
 
 
