@@ -523,11 +523,9 @@ def _run_ILS(Z, G, half_sizes, std_thresh, maxiter, coord):
     half_sizes: tuple of ints
         half the window length in both directions (half_size_y, half_size_x).
     std_thresh: float
-        Number of standard deviations above which defines outliers.
+        number of standard deviations above which defines outliers.
     maxiter : int
-        maximum number of iterations of IRLS when approximating the L1 norm.
-        Setting maxiter to 0 will return the coefficient solution to minimizing
-        the L2-norm.
+        maximum number of iterations of outlier detection and removal.
     coord : tuple
         the (x, y) coordinate in Z representing the data point around which
         to create the window
@@ -556,7 +554,7 @@ def _run_ILS(Z, G, half_sizes, std_thresh, maxiter, coord):
 
     # Don't fit if the center coordinate is nan
     if np.isnan(Z[coord]):
-        return [np.nan]*len(G[0])
+        return np.full(N_par, np.nan)
 
     # Calculate window bounds
     half_size_y, half_size_x = half_sizes
