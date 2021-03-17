@@ -35,7 +35,8 @@ if __name__ == '__main__':
         'bin/ice_interactive_trace.py',
         'bin/ice_resample.py',
         'bin/ice_view_stack_mean.py',
-        'bin/ice_explore_stack.py'
+        'bin/ice_explore_stack.py',
+        'bin/ice_info.py'
     ]
 
     # Run build
