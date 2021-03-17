@@ -469,6 +469,8 @@ class RasterInfo:
         Band number to read from raster. Default: 1.
     epsg: int, optional
         EPSG code for input geographic data. Default: None.
+    match: bool, optional
+        Find an approximate match using FindMatches. Default: False.
     islice: slice, optional
         Slice object specifying image rows to subset.
     jslice: slice, optional
@@ -476,12 +478,12 @@ class RasterInfo:
     """
 
     def __init__(self, rasterfile=None, stackfile=None, X=None, Y=None,
-                 band=1, epsg=None, islice=None, jslice=None):
+                 band=1, epsg=None, match=False, islice=None, jslice=None):
         """
         Initialize attributes.
         """
         if rasterfile is not None:
-            self.load_gdal_info(rasterfile, islice=islice, jslice=jslice, band=band)
+            self.load_gdal_info(rasterfile, islice=islice, jslice=jslice, band=band, match=match)
             self.rasterfile = rasterfile
         elif stackfile is not None:
             self.load_stack_info(stackfile, islice=islice, jslice=jslice)
@@ -491,7 +493,8 @@ class RasterInfo:
             self.xstart = self.dx = self.ystart = self.dy = self.ny = self.nx = None
             self._epsg = None
 
-    def load_gdal_info(self, rasterfile, projWin=None, islice=None, jslice=None, band=1):
+    def load_gdal_info(self, rasterfile, projWin=None, islice=None, jslice=None,
+                       band=1, match=False):
         """
         Read raster and geotransform information from GDAL dataset.
 
@@ -508,6 +511,8 @@ class RasterInfo:
             Slice object specifying image columns to subset.
         band: int, optional
             Band number to read from raster. Default: 1.
+        match: bool, optional
+            Find an approximate match using FindMatches. Default: False.
 
         Returns
         -------
@@ -529,7 +534,7 @@ class RasterInfo:
 
         # Attempt to extract projection information as an EPSG code
         try:
-            self._epsg = wkt_to_epsg(dset.GetProjection())
+            self._epsg = wkt_to_epsg(dset.GetProjection(), match=match)
         except TypeError:
             self._epsg = None
             pass
