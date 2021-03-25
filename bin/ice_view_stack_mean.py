@@ -34,8 +34,12 @@ def main(args):
     # Load the stack
     stack = ice.Stack(args.stackfile)
 
-    # Compute mean
-    mean = stack.mean(key=args.key)
+    # Check if requested dataset is 2D. If so, view it directly
+    if stack[args.key].ndim == 2:
+        mean = stack[args.key][()]
+    # Otherwise, compute mean
+    else:
+        mean = stack.mean(key=args.key)
 
     # Load reference SAR image
     if args.ref is not None:
