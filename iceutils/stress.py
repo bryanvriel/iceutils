@@ -392,9 +392,9 @@ def robust_gradient(z, spacing=1.0, window_size=3.0, order=2, ftol=1e-5, std_thr
     # p(x,y) = a0 + a1*x + a2*y + a3*x^2 + a4*x*y + a5*y^2 + ...
     exps = [(k-n, n) for k in range(order + 1) for n in range(k + 1)]
     ncoef = len(exps)
-    G = np.empty((win_size_y * win_size_x, ncoef))
+    G = np.empty((ncoef, win_size_y, win_size_x))
     for i, exp in enumerate(exps):
-        G[:,i] = np.outer(window_y**exp[0], window_x**exp[1]).ravel()
+        G[i,:,:] = np.outer(window_y**exp[0], window_x**exp[1])
 
     # Pad data
     Z = np.pad(z, (half_size_y, half_size_x), mode='reflect')
@@ -434,7 +434,7 @@ def _run_IRLS(Z, G, half_sizes, ftol, maxiter, coord):
     Z : array_like
         2-dimensional array of data with padding
     G : array_like
-        2-dimensional design matrix of shape (window_size^2, ncoef)
+        3-dimensional design matrix of shape (ncoef, win_size_y, win_size_x)
     half_sizes: tuple of ints
         half the window length in both directions (half_size_y, half_size_x).
     ftol : float
@@ -476,7 +476,14 @@ def _run_IRLS(Z, G, half_sizes, ftol, maxiter, coord):
     cstart, cend = coord[1] - half_size_x, coord[1] + half_size_x + 1
 
     # Get sub-window of data surrounding coordinate
-    d = Z[rstart:rend, cstart:cend].ravel()
+    d = Z[rstart:rend, cstart:cend]
+
+    # Get corresponding sub-window of polynomial design matrix
+    G = G[:, :d.shape[0], :d.shape[1]].reshape(N_par, d.size)
+
+    # Flatten and transpose data and design matrix
+    d = d.ravel()
+    G = G.T
 
     # Ignore any nan values
     nan_mask = np.isnan(d).nonzero()[0]
@@ -519,7 +526,7 @@ def _run_ILS(Z, G, half_sizes, std_thresh, maxiter, coord):
     Z : array_like
         2-dimensional array of data with padding
     G : array_like
-        2-dimensional design matrix of shape (window_size^2, ncoef)
+        3-dimensional design matrix of shape (ncoef, win_size_y, win_size_x)
     half_sizes: tuple of ints
         half the window length in both directions (half_size_y, half_size_x).
     std_thresh: float
@@ -550,7 +557,7 @@ def _run_ILS(Z, G, half_sizes, std_thresh, maxiter, coord):
         etc...
     """
     # Cache number of parameters
-    N_par = G.shape[1]
+    N_par = G.shape[0]
 
     # Don't fit if the center coordinate is nan
     if np.isnan(Z[coord]):
@@ -562,7 +569,14 @@ def _run_ILS(Z, G, half_sizes, std_thresh, maxiter, coord):
     cstart, cend = coord[1] - half_size_x, coord[1] + half_size_x + 1
 
     # Get sub-window of data surrounding coordinate
-    d = Z[rstart:rend, cstart:cend].ravel()
+    d = Z[rstart:rend, cstart:cend]
+
+    # Get corresponding sub-window of polynomial design matrix
+    G = G[:, :d.shape[0], :d.shape[1]].reshape(N_par, d.size)
+
+    # Flatten and transpose data and design matrix
+    d = d.ravel()
+    G = G.T
 
     # Keep only finite arrays
     fmask = np.isfinite(d)
