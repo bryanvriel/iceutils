@@ -327,8 +327,9 @@ def sgolay_gradient(z, spacing=1.0, axis=None, window_size=3, order=4):
         return s / spacing
 
 
-def robust_gradient(z, spacing=1.0, window_size=3.0, order=2, ftol=1e-5, std_thresh=3,
-                    maxiter=9, lsq_method='robust_l2', njobs=None):
+def robust_gradient(z, spacing=1.0, window_size=3.0, order=2,
+                    ref_mask=None, mask_thresh=1,
+                    ftol=1e-5, std_thresh=3, maxiter=9, lsq_method='robust_l2', njobs=None):
     """ A robust filter that minimizes the misfit (Gx - d) using either iterative
     least squares (outlier removal) or iterative re-weighted least squares for Lp-norm
     approximation.
@@ -346,8 +347,9 @@ def robust_gradient(z, spacing=1.0, window_size=3.0, order=2, ftol=1e-5, std_thr
     window_size: scalar or tuple of scalars, optional
         Window size in units of specified spacing. If tuple provided, window size is
         specified as (win_y, win_x). Default: 3.
-    order : int, optional
-        Polynomial order for the robust fitting.
+    order : int or tuple, optional
+        Polynomial order for the robust fitting. If tuple, represents (order_low, order_high)
+        for strain-dependent polynomial order. Default: 2.
     std_thresh : float, optional
         Number of standard deviations above which defines outliers (for lsq_method='robust_l2').
         Default: 3.0.
@@ -390,14 +392,24 @@ def robust_gradient(z, spacing=1.0, window_size=3.0, order=2, ftol=1e-5, std_thr
 
     # Exponents for x and y corresponding to each coefficient
     # p(x,y) = a0 + a1*x + a2*y + a3*x^2 + a4*x*y + a5*y^2 + ...
-    exps = [(k-n, n) for k in range(order + 1) for n in range(k + 1)]
-    ncoef = len(exps)
-    G = np.empty((ncoef, win_size_y, win_size_x))
-    for i, exp in enumerate(exps):
-        G[i,:,:] = np.outer(window_y**exp[0], window_x**exp[1])
+    def _build_poly_matrix(order):
+        exps = [(k-n, n) for k in range(order + 1) for n in range(k + 1)]
+        ncoef = len(exps)
+        G = np.empty((ncoef, win_size_y, win_size_x))
+        for i, exp in enumerate(exps):
+            G[i,:,:] = np.outer(window_y**exp[0], window_x**exp[1])
+        return G
+
+    # If low and high orders are provided, construct G for each
+    if isinstance(order, (tuple, list)):
+        G = (_build_poly_matrix(order[0]), _build_poly_matrix(order[1]))
+    else:
+        G = _build_poly_matrix(order)
 
     # Pad data
     Z = np.pad(z, (half_size_y, half_size_x), mode='reflect')
+    if ref_mask is not None:
+        ref_mask = np.pad(ref_mask, (half_size_y, half_size_x), mode='edge')
 
     # Get coordinates for each data point in padded array
     Zy = np.arange(half_size_y, nrow + half_size_y)
@@ -406,7 +418,8 @@ def robust_gradient(z, spacing=1.0, window_size=3.0, order=2, ftol=1e-5, std_thr
 
     # Cache least squares method
     if lsq_method == 'robust_l2':
-        func = partial(_run_ILS, Z, G, (half_size_y, half_size_x), std_thresh, maxiter)
+        func = partial(_run_ILS, Z, G, (half_size_y, half_size_x), std_thresh, maxiter,
+                       ref_mask=ref_mask, mask_thresh=mask_thresh)
     elif lsq_method == 'robust_lp':
         func = partial(_run_IRLS, Z, G, (half_size_y, half_size_x), ftol, maxiter)
     else:
@@ -417,7 +430,7 @@ def robust_gradient(z, spacing=1.0, window_size=3.0, order=2, ftol=1e-5, std_thr
         x = list(p.map(func, coords))
 
     # Get useful coefficients
-    x = np.reshape(x, (nrow, ncol, ncoef))
+    x = np.reshape(x, (nrow, ncol, 3))
     z_smooth = x[:, :, 0]
     z_dy = x[:, :, 1] / dy
     z_dx = x[:, :, 2] / dx
@@ -433,8 +446,9 @@ def _run_IRLS(Z, G, half_sizes, ftol, maxiter, coord):
     ---------
     Z : array_like
         2-dimensional array of data with padding
-    G : array_like
-        3-dimensional design matrix of shape (ncoef, win_size_y, win_size_x)
+    G : array_like or tuple of array_like
+        3-dimensional design matrix of shape (ncoef, win_size_y, win_size_x). If tuple,
+        contains design matrix for low- and high-order polynomials.
     half_sizes: tuple of ints
         half the window length in both directions (half_size_y, half_size_x).
     ftol : float
@@ -518,7 +532,8 @@ def _run_IRLS(Z, G, half_sizes, ftol, maxiter, coord):
     return x
 
 
-def _run_ILS(Z, G, half_sizes, std_thresh, maxiter, coord):
+def _run_ILS(Z, G, half_sizes, std_thresh, maxiter, coord,
+             ref_mask=None, mask_thresh=1):
     """ Iterative Least Squares where outliers are removed in successive iterations.
 
     Paramters
@@ -526,7 +541,8 @@ def _run_ILS(Z, G, half_sizes, std_thresh, maxiter, coord):
     Z : array_like
         2-dimensional array of data with padding
     G : array_like
-        3-dimensional design matrix of shape (ncoef, win_size_y, win_size_x)
+        3-dimensional design matrix of shape (ncoef, win_size_y, win_size_x). If tuple,
+        contains design matrix for low- and high-order polynomials.
     half_sizes: tuple of ints
         half the window length in both directions (half_size_y, half_size_x).
     std_thresh: float
@@ -556,12 +572,12 @@ def _run_ILS(Z, G, half_sizes, std_thresh, maxiter, coord):
         dz/dx   @ (0, 0) = a2
         etc...
     """
-    # Cache number of parameters
-    N_par = G.shape[0]
+    # For all cases, we only return first three coefficients associated with linear terms
+    N_par_return = 3
 
     # Don't fit if the center coordinate is nan
     if np.isnan(Z[coord]):
-        return np.full(N_par, np.nan)
+        return np.full(N_par_return, np.nan)
 
     # Calculate window bounds
     half_size_y, half_size_x = half_sizes
@@ -571,8 +587,16 @@ def _run_ILS(Z, G, half_sizes, std_thresh, maxiter, coord):
     # Get sub-window of data surrounding coordinate
     d = Z[rstart:rend, cstart:cend]
 
+    # If a mask is provided, choose correct polynomial matrix
+    if ref_mask is not None:
+        assert isinstance(G, (tuple, list)), \
+            'Must provide tuple of (G_low_order, G_high_order) if ref_mask provided.'
+        mask_val = ref_mask[coord[0], coord[1]]
+        G = G[mask_val >= mask_thresh]
+
     # Get corresponding sub-window of polynomial design matrix
-    G = G[:, :d.shape[0], :d.shape[1]].reshape(N_par, d.size)
+    N_par = G.shape[0]
+    G = G[:, :d.shape[0], :d.shape[1]].reshape(-1, d.size)
 
     # Flatten and transpose data and design matrix
     d = d.ravel()
@@ -583,7 +607,7 @@ def _run_ILS(Z, G, half_sizes, std_thresh, maxiter, coord):
     Gf = G[fmask, :]
     df = d[fmask]
     if df.size < N_par:
-        return np.full(N_par, np.nan)
+        return np.full(N_par_return, np.nan)
 
     # Iterative least squares
     for _ in range(maxiter):
@@ -607,9 +631,9 @@ def _run_ILS(Z, G, half_sizes, std_thresh, maxiter, coord):
         Gf = Gf[inliers, :]
         df = df[inliers]
         if df.size < N_par:
-            return np.full(N_par, np.nan)
+            return np.full(N_par_return, np.nan)
         
-    return x
+    return x[:N_par_return]
 
 
 def _sgolay2d(z, window_size, order, derivative=None):
