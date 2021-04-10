@@ -45,8 +45,12 @@ class Stack:
                 self.fmt = fmt
 
             # Initialize datasets dictionary
-            for key in self.fid.keys():
-                self._datasets[key] = self.fid[key]
+            for key, value in self.fid.items():
+                if isinstance(value, h5py.Dataset):
+                    self._datasets[key] = value
+                elif isinstance(value, h5py.Group):
+                    for dkey, dvalue in value.items():
+                        self._datasets['%s/%s' % (key, dkey)] = dvalue
 
         # Otherwise, initialize from another stack or from separate time and RasterInfo
         else:
