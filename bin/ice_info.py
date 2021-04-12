@@ -29,6 +29,8 @@ def main(args):
 
     print('Geographic extent: %f %f %f %f' % tuple(hdr.extent))
 
+    print('Geographic spacing: (dy = %f, dx = %f)' % (hdr.dy, hdr.dx))
+
     print('EPSG:', hdr.epsg)
 
 
