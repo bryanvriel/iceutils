@@ -30,6 +30,7 @@ if __name__ == '__main__':
 
     # List of scripts to install
     scripts = [
+        'bin/ice_animate_stack.py',
         'bin/ice_stack_invert.py',
         'bin/ice_crop_stack.py',
         'bin/ice_interactive_trace.py',
