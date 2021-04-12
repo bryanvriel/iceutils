@@ -36,6 +36,8 @@ def parse():
         help='Dataset to view. Default: data.')
     parser.add_argument('-r', '-ref', '--ref', action='store', type=str, default=None,
         help='Reference SAR raster for background. Default: None.')
+    parser.add_argument('-rel_index', '--rel_index', action='store', type=int, default=None,
+        help='Time index for reference frame to subtract from all frames. Default: None.')
     parser.add_argument('-s', '-save', '--save', action='store', type=str, default='animation.mp4', 
         help='Name of file to save animation as. Default: animation.mp4.')
     parser.add_argument('-show', '--show', action='store_true', default=False,
@@ -73,7 +75,13 @@ def main(args):
         ax.imshow(db, aspect='auto', cmap='gray', vmin=low, vmax=high,
                         extent=stack.hdr.extent)
 
-    im = ax.imshow(data[0], extent=stack.hdr.extent, cmap=cmap, clim=args.clim,
+    # Extract reference frame if index provided
+    if args.rel_index is not None:
+        data_ref = data[args.rel_index]
+    else:
+        data_ref = 0.0
+
+    im = ax.imshow(data[0] - data_ref, extent=stack.hdr.extent, cmap=cmap, clim=args.clim,
         alpha=args.alpha)
 
     # Create title
@@ -91,7 +99,7 @@ def main(args):
 
     # Update the frame
     def animate(i):
-        im.set_data(data[i])
+        im.set_data(data[i] - data_ref)
         datestr = ice.tdec2datestr(stack.tdec[i])
         tx.set_text(args.title + ' ' + datestr)
 
