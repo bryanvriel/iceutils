@@ -307,6 +307,14 @@ class Stack:
         else:
             return None
 
+    @property
+    def shape(self):
+        if self.fmt == 'NHW':
+            shape = (self.tdec.size, self.hdr.shape[0], self.hdr.shape[1])
+        elif self.fmt == 'HWN':
+            shape = (self.hdr.shape[0], self.hdr.shape[1], self.tdec.size)
+        return shape
+
 
 class MultiStack:
     """
