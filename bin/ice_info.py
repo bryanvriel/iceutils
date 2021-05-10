@@ -27,7 +27,7 @@ def main(args):
         
     else:
         hdr = ice.RasterInfo(args.rasterfile, match=args.match)
-        tdec = none
+        tdec = None
 
     print('Image shape: (%d, %d)' % (hdr.ny, hdr.nx))
 
