@@ -21,15 +21,23 @@ def main(args):
 
     # Get rasterinfo
     if args.rasterfile.endswith('.h5'):
-        hdr = ice.RasterInfo(stackfile=args.rasterfile)
+        stack = ice.Stack(args.rasterfile)
+        hdr = stack.hdr
+        tdec = stack.tdec
+        
     else:
         hdr = ice.RasterInfo(args.rasterfile, match=args.match)
+        tdec = none
 
     print('Image shape: (%d, %d)' % (hdr.ny, hdr.nx))
 
     print('Geographic extent: %f %f %f %f' % tuple(hdr.extent))
 
     print('Geographic spacing: (dy = %f, dx = %f)' % (hdr.dy, hdr.dx))
+
+    if tdec is not None:
+        print('Time span: %f -> %f' % (tdec[0], tdec[-1]))
+        print('Median time spacing: %f' % np.median(np.diff(tdec)))
 
     print('EPSG:', hdr.epsg)
 
