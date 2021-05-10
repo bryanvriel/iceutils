@@ -726,7 +726,7 @@ class RasterInfo:
 
         return xmask, ymask
 
-    def read_GCPs(self, rasterfile=None, gcp_epsg=None, epsg_out=None, s=5):
+    def read_GCPs(self, rasterfile=None, gcp_epsg=None, epsg_out=None, k=3, s=5, scale=1.0):
         """
         Load ground control points (GCPs) from gdal Dataset. Then, construct 2D
         interpolating splines that represent mapping from image to georeferenced
@@ -740,8 +740,12 @@ class RasterInfo:
             Override EPSG code for GCP coordinates. Default determined from GCP projection.
         epsg_out: int, optional
             EPSG code for output X-Y coordinates. It not provided, use GCP EPSG.
+        k: int, optional
+            Order of the splines. Default: 3.
         s: float, optional
             Smoothing factor for splines. See docs for SmoothBivariateSpline. Default: 5.
+        scale: float, optional
+            Scale factor for image and geographic coordinates. Default: 1.0.
 
         Returns
         -------
@@ -779,9 +783,13 @@ class RasterInfo:
         if epsg_out != gcp_epsg:
             x, y = transform_coordinates(x, y, gcp_epsg, epsg_out)
 
+        # Scale the values
+        self._gcp_scale = scale
+        x, y, line, pixel = [scale * v for v in (x, y, line, pixel)]
+
         # Build splines
-        self._gcp_spline_row = SmoothBivariateSpline(x, y, line, s=s)
-        self._gcp_spline_col = SmoothBivariateSpline(x, y, pixel, s=s)
+        self._gcp_spline_row = SmoothBivariateSpline(x, y, line, kx=k, ky=k, s=s)
+        self._gcp_spline_col = SmoothBivariateSpline(x, y, pixel, kx=k, ky=k, s=s)
         self._gcp_epsg = epsg_out
 
     def __eq__(self, other):
@@ -957,11 +965,11 @@ class RasterInfo:
             raise ValueError('Must run RasterInfo.read_GCPs first.')
 
         # Evaluate splines
-        col = self._gcp_spline_col(x, y, grid=False)
-        row = self._gcp_spline_row(x, y, grid=False)
+        col = self._gcp_spline_col(self._gcp_scale*x, self._gcp_scale*y, grid=False)
+        row = self._gcp_spline_row(self._gcp_scale*x, self._gcp_scale*y, grid=False)
 
         # Return
-        return row, col
+        return row/self._gcp_scale, col/self._gcp_scale
 
 
 # --------------------------------------------------------------------------------
