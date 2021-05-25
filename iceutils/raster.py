@@ -43,6 +43,7 @@ numpy_to_gdal_type = {
     '|i1': gdal.GDT_Byte,
     '<i2': gdal.GDT_Int16,
     '<i4': gdal.GDT_Int32,
+    '|u1': gdal.GDT_Byte,
     '<u2': gdal.GDT_UInt16,
     '<u4': gdal.GDT_UInt32,
     '<f4': gdal.GDT_Float32,
@@ -1334,7 +1335,7 @@ def griddata(x, y, z, dx, dy, x_extent=None, y_extent=None, method='linear', eps
 
     return raster
 
-def inpaint(raster, mask=None, method='telea', r=3.0):
+def inpaint(raster, mask=None, method='spring', r=3.0):
     """
     Inpaint a raster at NaN values or with an input mask.
 
@@ -1367,7 +1368,9 @@ def inpaint(raster, mask=None, method='telea', r=3.0):
         assert mask.shape == rdata.shape, 'Mask and raster shape mismatch.'
 
     # Call inpainting
-    if method == 'telea': 
+    if method == 'spring':
+        inpainted = _inpaint_spring(rdata, mask)
+    elif method == 'telea': 
         umask = mask.astype(np.uint8)
         inpainted = cv.inpaint(rdata, umask, r, cv.INPAINT_TELEA)
     elif method == 'biharmonic': 
@@ -1603,6 +1606,82 @@ def get_utm_EPSG(lon, lat):
     else:
         epsg = '327%02d' % zone
     return int(epsg)
- 
+
+
+def _inpaint_spring(ain, mask):
+    '''Returns the inpainted matrix using the spring metaphor.
+       All NaN values in the matrix are filled in.
+       
+       Based on the original inpaintnans package by John D'Errico.
+       http://www.mathworks.com/matlabcentral/fileexchange/4551-inpaintnans'''
+    import scipy.sparse as sp
+    import scipy.sparse.linalg as sla
+
+    dims = ain.shape
+    bout = ain.copy()
+    nnn = dims[0]
+    mmm = dims[1]
+    nnmm = nnn * mmm
+
+    [iii, jjj] = np.where(mask == False)
+    [iin, jjn] = np.where(mask == True)
+    nnan = len(iin)    #Number of nan.
+
+    if nnan == 0:
+        return bout
+
+    hv_springs = np.zeros((4 * nnan, 2), dtype=int)
+    cnt = 0
+    for kkk in range(nnan):
+        ypos = iin[kkk]
+        xpos = jjn[kkk]
+        indc = ypos * mmm + xpos
+        if(ypos > 0):
+            hv_springs[cnt, :]   = [indc - mmm, indc]   #Top
+            cnt = cnt + 1
+
+        if(ypos < (nnn - 1)):
+            hv_springs[cnt, :] = [indc, indc + mmm]  #Bottom
+            cnt = cnt + 1
+
+        if(xpos>0):
+            hv_springs[cnt, :] = [indc - 1, indc]  #Left
+            cnt = cnt + 1
+
+        if(xpos < (mmm - 1)):
+            hv_springs[cnt, :] = [indc, indc + 1]  #Right
+            cnt = cnt + 1
+
+    hv_springs = hv_springs[0:cnt, :]
+
+    tempb = _unique_rows(hv_springs)
+    cnt = tempb.shape[0]
+
+    alarge = sp.csc_matrix((np.ones(cnt), (np.arange(cnt), tempb[:, 0])),
+            shape=(cnt, nnmm))
+    alarge = alarge + sp.csc_matrix((-np.ones(cnt), (np.arange(cnt)
+        , tempb[:, 1])), shape=(cnt, nnmm))
+
+    indk = iii * mmm + jjj
+    indu = iin * mmm + jjn
+    dkk  = -ain[iii, jjj]
+    del iii
+    del jjj
+
+    aknown = sp.csc_matrix(alarge[:, indk])
+    rhs = sp.csc_matrix.dot(aknown, dkk)
+    del aknown
+    del dkk
+    anan = sp.csc_matrix(alarge[:, indu])
+    dku = sla.lsqr(anan, rhs)
+    bout[iin, jjn] = dku[0]
+    return bout
+
+
+def _unique_rows(scenes):
+    '''Unique rows utility similar to matlab.'''
+    uscenes = np.unique(scenes.view([('',scenes.dtype)]*scenes.shape[1])).view(scenes.dtype).reshape(-1,scenes.shape[1])
+    return uscenes
+
 
 # end of file
