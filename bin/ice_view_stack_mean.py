@@ -19,8 +19,8 @@ def parse():
         help='Reference SAR raster for background. Default: None.')
     parser.add_argument('-alpha', action='store', type=float, default=1.0,
         help='Image alpha for displaying raster. Default: 1.0.')
-    parser.add_argument('-cmap', action='store', type=str, default='GMT_haxby',
-        help='Matplotlib cmap to use for displaying raster. Default: GMT_haxby.')
+    parser.add_argument('-cmap', action='store', type=str, default='turbo',
+        help='Matplotlib cmap to use for displaying raster. Default: turbo.')
     parser.add_argument('-clim', action='store', type=float, nargs=2, default=[None, None],
         help='Color limits for display.')
     parser.add_argument('-save', action='store', type=str, default=None,
