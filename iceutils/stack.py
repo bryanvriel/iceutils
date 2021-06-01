@@ -73,6 +73,8 @@ class Stack:
             self.fid['y'] = self.hdr.ycoords
             self.fid['tdec'] = self.tdec
             self.fid.attrs['format'] = fmt; self.fmt = fmt
+            if self.hdr.epsg is not None:
+                self.fid.attrs['EPSG'] = self.hdr.epsg
 
         # Initialize a NaN time series
         self._nan_tseries = np.full(self.tdec.shape, np.nan, dtype='f')
