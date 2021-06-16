@@ -8,14 +8,14 @@ matplotlib
 gdal
 h5py
 pyproj
-scikit-learn
 scikit-image
 tqdm
-pint
-opencv
+opencv (optional)
+scikit-learn (optional)
+pint (optional)
 cvxopt (optional)
 ```
-All of the packages can be installed via Anaconda using the `conda-forge` channel. Also note that the package `cvxopt` is optional and only used for the `iceutils.tseries` module. The installation process can be streamlined by copying those packages into a `requirements.txt` file and running:
+All of the packages can be installed via Anaconda using the `conda-forge` channel. Also note that optional packages `scikit-learn`, `pint`, and `cvxopt` are only necessary for using the `iceutils.tseries` module. Additionally, `opencv` is only needed for the `iceutils.correlate` module and some isolated inpainting routines. The installation process can be streamlined by copying the necessary packages and any optional packages into a text file (e.g., `requirements.txt`) and running:
 ```
 conda install -c conda-forge --file requirements.txt
 ```
