@@ -3,12 +3,16 @@
 import numpy as np
 from scipy.ndimage.interpolation import map_coordinates
 from skimage.restoration.inpaint import inpaint_biharmonic
-import cv2 as cv
 import warnings
 import pyproj
 import h5py
 from osgeo import gdal, osr
 import sys
+
+try:
+    import cv2 as cv
+except ImportError:
+    cv = None
 
 from .boundary import transform_coordinates
 
@@ -1366,6 +1370,11 @@ def inpaint(raster, mask=None, method='spring', r=3.0):
         mask = np.isnan(rdata)
     else:
         assert mask.shape == rdata.shape, 'Mask and raster shape mismatch.'
+
+    # Check suitability of inpainting method with available packages
+    if method == 'telea' and cv is None:
+        warnings.warn('OpenCV package cv2 not found; falling back to spring inpainting.')
+        method = 'spring'
 
     # Call inpainting
     if method == 'spring':

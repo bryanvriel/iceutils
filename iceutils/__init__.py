@@ -16,7 +16,7 @@ try:
 except ImportError:
     pass
 
-# tseries requires cvxopt
+# tseries requires cvxopt and scikit-learn
 try:
     from . import tseries
 except ImportError:
@@ -25,9 +25,6 @@ except ImportError:
 # Other submodules
 from . import sim
 from . import pymp
-
-# Site-dependent modules
-from . import jakobshavn
 
 # Utility parameter class
 class GenericClass:
