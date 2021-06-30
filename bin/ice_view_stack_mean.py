@@ -60,6 +60,8 @@ def main(args):
                         extent=stack.hdr.extent)
     im = ax.imshow(mean, aspect='auto', vmin=vmin, vmax=vmax, cmap=cmap,
                    extent=stack.hdr.extent, alpha=args.alpha)
+    cbar = plt.colorbar(im, ax=ax, pad=0.02)
+    cbar.set_label(args.key)
 
     plt.show()
 
