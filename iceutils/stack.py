@@ -35,8 +35,12 @@ class Stack:
             try:
                 self.tdec = self.fid['tdec'][()]
             except KeyError:
-                self.tdec = self.fid['t'][()]
-                warnings.warn('Using dataset "t" for time array.', category=UserWarning)
+                try:
+                    self.tdec = self.fid['t'][()]
+                    warnings.warn('Using dataset "t" for time array.', category=UserWarning)
+                except KeyError:
+                    self.tdec = np.linspace(0, 1, 2)
+                    warnings.warn('No time vector found.', category=UserWarning)
 
             # Also try to read format attribute
             try:
