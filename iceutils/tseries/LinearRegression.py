@@ -51,7 +51,7 @@ def select_solver(solver_type, reg_indices=None, rw_iter=1, regMat=None, robust=
     # Instantiate a solver
     if solver_type == 'lasso':
         solver = LassoRegression(reg_indices, penalty, regMat=regMat, rw_iter=rw_iter,
-                                 n_min=n_min)
+                                 robust=robust, n_min=n_min)
     elif solver_type == 'ridge':
         solver = RidgeRegression(reg_indices, penalty, regMat=regMat, n_min=n_min)
     elif solver_type == 'omp':
@@ -148,7 +148,7 @@ class RidgeRegression(LinearRegression):
     Simple ridge regression (L2-regularization on amplitudes).
     """
 
-    def __init__(self, reg_indices, penalty, regMat=None, **kwargs):
+    def __init__(self, reg_indices, penalty, robust=False, regMat=None, **kwargs):
         """
         Initialize the RidgeRegression class and store regularization indices
         and regularization parameter.
@@ -211,8 +211,11 @@ class RidgeRegression(LinearRegression):
         else:
             GtG = np.dot(Gf.T, Gf)
             Gtd = np.dot(Gf.T, df)
-        iGtG = self.inv_func(GtG + regMat)
-        m = np.dot(iGtG, Gtd)
+        if self.robust:
+            m = self.ransac.fit(GtG, Gtd)
+        else:
+            iGtG = self.inv_func(GtG + regMat)
+            m = np.dot(iGtG, Gtd)
         return SUCCESS, m, iGtG
 
 
