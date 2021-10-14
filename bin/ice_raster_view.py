@@ -13,6 +13,8 @@ def parse():
         View a raster.""")
     parser.add_argument('rasterfile', type=str,
         help='Input raster to display.')
+    parser.add_argument('-b', action='store', type=int, default=1, dest='band',
+        help='Raster band. Default: 1.')
     parser.add_argument('-cmap', action='store', type=str, default='turbo',
         help='Matplotlib cmap to use for displaying raster. Default: turbo.')
     parser.add_argument('-clim', action='store', type=float, nargs=2, default=[None, None],
@@ -24,7 +26,7 @@ def parse():
 def main(args):
 
     # Load the raster
-    r = ice.Raster(args.rasterfile)
+    r = ice.Raster(args.rasterfile, band=args.band)
 
     fig, ax = plt.subplots()
     vmin, vmax = args.clim
