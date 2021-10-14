@@ -16,7 +16,7 @@ try:
 except ImportError:
     pass
 
-# tseries requires cvxopt and scikit-learn
+# tseries requires cvxopt, scikit-learn, and pint
 try:
     from . import tseries
 except ImportError:
