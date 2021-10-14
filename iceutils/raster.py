@@ -578,8 +578,8 @@ class RasterInfo:
 
             # Load coordinates
             try:
-                X = fid['x'][()]
-                Y = fid['y'][()]
+                X = fid['x'][()].squeeze()
+                Y = fid['y'][()].squeeze()
             except KeyError:
                 X = fid['X'][()]
                 Y = fid['Y'][()]
