@@ -1182,8 +1182,6 @@ def warp(raster, target_epsg=None, target_srs=None, source_srs=None,
                                             trg_y[islice, jslice],
                                             always_xy=True)
 
-            print(src_x.min(), src_x.max())
-
             # Interpolate source raster
             data_warped[islice, jslice] = interpolate_raster(raster, src_x, src_y,
                                                              ref_hdr=None, time_index=None, 
