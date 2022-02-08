@@ -14,6 +14,10 @@ def parse():
         help='Reference raster/stack file.')
     parser.add_argument('output', type=str,
         help='Output raster/stack file.')
+    parser.add_argument('-epsg', action='store', type=int, default=None,
+                        help='Force outputs EPSG code.')
+    parser.add_argument('-driver', action='store', type=str, default='ENVI',
+                        help='GDAL driver. Default: ENVI.')
     parser.add_argument('-keys', action='store', type=str, nargs='+', default=['data', 'weights'],
         help='List of stack keys to resample. Default: data, weights.')
     return parser.parse_args()
@@ -50,7 +54,11 @@ def main(args):
         inobj.resample(ref.hdr)
 
         # Write to disk
-        inobj.write_gdal(args.output, epsg=ref.hdr.epsg)
+        if args.epsg is not None:
+            out_epsg = args.epsg
+        else:
+            out_epsg = ref.hdr.epsg
+        inobj.write_gdal(args.output, epsg=out_epsg, driver=args.driver)
 
         
 if __name__ == '__main__':
