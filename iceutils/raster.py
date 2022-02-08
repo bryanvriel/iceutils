@@ -870,6 +870,13 @@ class RasterInfo:
         return (self.ny, self.nx)
 
     @property
+    def spacing(self):
+        """
+        Return pixel spacing.
+        """
+        return (self.dy, self.dx)
+
+    @property
     def xstop(self):
         return self.xstart + (self.nx - 1) * self.dx
 
