@@ -295,7 +295,7 @@ def sgolay_gradient(z, spacing=1.0, axis=None, window_size=3, order=4):
     if axis is None or isinstance(spacing, (tuple, list)):
 
         # Compute window sizes
-        wy, wx = _compute_windows(window_size, spacing)
+        wy, wx = compute_windows(window_size, spacing)
 
         # Unpack spacing
         dy, dx = spacing
@@ -395,7 +395,7 @@ def robust_gradient(z, spacing=1.0, window_size=3.0, order=2,
         window_size = np.full(z.shape, window_size, dtype=z.dtype)
 
     # Get maximum window sizes in both directions
-    max_win_size_y, max_win_size_x = _compute_windows(max_win_size, spacing)
+    max_win_size_y, max_win_size_x = compute_windows(max_win_size, spacing)
     max_half_size_y = max_win_size_y // 2
     max_half_size_x = max_win_size_x // 2
 
@@ -416,7 +416,7 @@ def robust_gradient(z, spacing=1.0, window_size=3.0, order=2,
     coords = product(Zy, Zx)
 
     # Now compute pixel-dependent window sizes
-    win_size_y, win_size_x = _compute_windows(window_size, spacing)
+    win_size_y, win_size_x = compute_windows(window_size, spacing)
     half_size_y = win_size_y // 2
     half_size_x = win_size_x // 2
 
@@ -737,7 +737,7 @@ def _sgolay2d(z, window_size, order, derivative=None):
         return Zr, Zc
 
 
-def _compute_windows(window_size, spacing):
+def compute_windows(window_size, spacing):
     """
     Convenience function to compute window sizes in pixels given spacing of
     pixels in physical coordinates.
