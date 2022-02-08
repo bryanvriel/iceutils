@@ -2,6 +2,7 @@
 
 import warnings
 import numpy as np
+import copy
 import h5py
 import sys
 
@@ -151,7 +152,7 @@ class Stack:
 
         # Optionally wrap as a raster
         if as_raster:
-            return Raster(data=data, hdr=self.hdr)
+            return Raster(data=data, hdr=copy.deepcopy(self.hdr))
         else:
             return data
 
