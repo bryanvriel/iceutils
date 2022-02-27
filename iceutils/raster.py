@@ -220,7 +220,7 @@ class Raster:
                 d = d[:,jslice]
         return d
 
-    def write_gdal(self, filename, dtype=gdal.GDT_Float32, driver='ENVI',
+    def write_gdal(self, filename, dtype=None, driver='ENVI',
                    epsg=None, projstr=None):
         """
         Write data and header to a GDAL raster.
@@ -244,6 +244,11 @@ class Raster:
         """
         # Create driver
         driver = gdal.GetDriverByName(driver)
+
+        # Try to determine dtype if not passed
+        if dtype is None:
+            dtype = np.dtype(self.data.dtype)
+            dtype = numpy_to_gdal_type[dtype.str]
 
         # Create dataset
         ds = driver.Create(filename, xsize=int(self.hdr.nx), ysize=int(self.hdr.ny),
@@ -949,6 +954,14 @@ class RasterInfo:
         Construct meshgrids for geo coordinates.
         """
         return np.meshgrid(self.xcoords, self.ycoords)
+
+    def coord_meshgrid(self):
+        """
+        Construct meshgrids for image coordinates.
+        """
+        row = np.arange(self.ny, dtype=int)
+        col = np.arange(self.nx, dtype=int)
+        return np.meshgrid(col, row)
 
     def xy_to_imagecoord(self, x, y):
         """
