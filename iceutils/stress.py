@@ -102,7 +102,7 @@ def compute_stress_strain(vx, vy, dx=100, dy=-100, grad_method='numpy', inpaint=
 
     # Compute scalar quantities from stress tensors
     dilatation = (L11 + L22).reshape(Ny, Nx)
-    effective_strain = np.sqrt(0.5 * (D11**2 + D12**2 + D21**2 + D22**2)).reshape(Ny, Nx)
+    effective_strain = np.sqrt(L11**2 + L22**2 + 0.25 * (L12 + L21)**2 + L11 * L22).reshape(Ny, Nx)
 
     # Store strain components in dictionary
     strain_dict = {'e_xx': exx,
@@ -117,9 +117,8 @@ def compute_stress_strain(vx, vy, dx=100, dy=-100, grad_method='numpy', inpaint=
         AGlen = AGlen_vs_temp(-10.0)
 
     # Effective viscosity
-    strain = np.sqrt(L11**2 + L22**2 + 0.25 * (L12 + L21)**2 + L11 * L22)
     scale_factor = 0.5 * AGlen**(-1 / n)
-    eta = scale_factor * strain**((1.0 - n) / n)
+    eta = scale_factor * effective_strain**((1.0 - n) / n)
 
     # Compute PHYSICAL stress tensor comonents
     txx = 2.0 * eta * D11.reshape(Ny, Nx)
