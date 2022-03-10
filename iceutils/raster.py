@@ -221,7 +221,7 @@ class Raster:
         return d
 
     def write_gdal(self, filename, dtype=None, driver='ENVI',
-                   epsg=None, projstr=None):
+                   epsg=None, nodataval=None, projstr=None):
         """
         Write data and header to a GDAL raster.
 
@@ -235,6 +235,8 @@ class Raster:
             GDAL-compatible raster driver for output raster file. Default: ENVI.
         epsg: int, optional
             EPSG code for output. Default: None.
+        nodataval: int, float, optional
+            No data value to pass to GDAL dataset. Default: None.
         projstr: str, optional
             PROJ string for output if no EPSG provided. Default: None.
 
@@ -268,7 +270,10 @@ class Raster:
             ds.SetProjection(srs.ExportToWkt())
 
         # Write data
-        ds.GetRasterBand(1).WriteArray(self.data)
+        b = ds.GetRasterBand(1)
+        if nodataval is not None:
+            b.SetNoDataValue(nodataval)
+        b.WriteArray(self.data)
         ds = None
 
         return
@@ -309,7 +314,7 @@ class Raster:
 
         Parameters
         ----------
-        factor: int, optional
+        factor: int or tuple of ints, optional
             Downsampling factor. Default: 2.
         func: callable, optional
             Function object which is used to calculate the return value for each local block.
@@ -323,11 +328,15 @@ class Raster:
         """
         from skimage.measure import block_reduce
 
+        # Create tuple if single integer provided
+        if isinstance(factor, int):
+            factor = (factor, factor)
+
         # Perform downscaling
-        self.data = block_reduce(self.data, (factor, factor), func, cval)
+        self.data = block_reduce(self.data, factor, func, cval)
 
         # Create new header
-        X, Y = [arr[::factor, ::factor] for arr in self.hdr.meshgrid()]
+        X, Y = [arr[::factor[0], ::factor[1]] for arr in self.hdr.meshgrid()]
         self.hdr = RasterInfo(X=X, Y=Y, epsg=self.hdr.epsg)
 
         return
@@ -1258,6 +1267,50 @@ def warp_with_gcp_splines(raster, gcp_hdr, x=None, y=None, out_hdr=None, order=3
 
     # Create new Raster
     return Raster(data=out.reshape(x.shape), hdr=out_hdr)
+
+def write_gdal(arrays, filename, geotransform=None, epsg=None,
+               projstr=None, driver='ENVI', nodataval=None, dtype=None):
+    """
+    Global function for writing arrays to GDAL file with projection
+    information.
+    """
+    # Create driver
+    driver = gdal.GetDriverByName(driver)
+
+    # If only a single array is passed, make a tuple
+    if not isinstance(arrays, tuple):
+        arrays = (arrays,)
+    n_bands = len(arrays)
+    Ny, Nx = arrays[0].shape
+
+    # Try to determine dtype if not passed
+    if dtype is None:
+        dtype = np.dtype(arrays[0].dtype)
+        dtype = numpy_to_gdal_type[dtype.str]
+
+    # Create dataset
+    ds = driver.Create(filename, xsize=Nx, ysize=Ny, bands=n_bands, eType=dtype)
+
+    # Create geotransform and projection
+    if geotransform is not None:
+        ds.SetGeoTransform(geotransform)
+    if epsg is not None or projstr is not None:
+        srs = osr.SpatialReference()
+        if epsg is not None:
+            srs.SetFromUserInput('EPSG:%d' % epsg)
+        else:
+            srs.SetFromUserInput(projstr)
+        ds.SetProjection(srs.ExportToWkt())
+
+    # Write data
+    for bcnt, array in enumerate(arrays):
+        b = ds.GetRasterBand(bcnt + 1)
+        if nodataval is not None:
+            b.SetNoDataValue(nodataval)
+        b.WriteArray(array)
+
+    # Close dataset
+    ds = None
 
 def write_array_as_raster(array, hdr, filename, epsg=None, projstr=None,
                           dtype=None, driver='ENVI'):
