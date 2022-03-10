@@ -36,7 +36,7 @@ class Boundary:
         self._y = self._y[::-1]
         self._init_path()
 
-    def contains_points(self, x, y):
+    def contains_points(self, x, y, radius=0.0):
         """
         Check if point resides within boundary.
         """
@@ -47,7 +47,7 @@ class Boundary:
             points = np.column_stack((x, y))
 
         # Check if within boundary
-        flags = self.path.contains_points(points)
+        flags = self.path.contains_points(points, radius=radius)
 
         # Return mask reshaped to original shapes
         return flags.reshape(x.shape)
