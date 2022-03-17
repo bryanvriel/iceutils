@@ -1,8 +1,17 @@
 #-*- coding: utf-8 -*-
 
 import matplotlib.pyplot as plt
-from matplotlib import rcParams, colors
+from matplotlib import rcParams, colors, cm
 _LUTSIZE = rcParams['image.lut']
+
+def create_scalar_mappable(vmin, vmax, cmap):
+    """
+    Convenience function to create a scalar mappable suitable for passing
+    to plt.colorbar().
+    """
+    norm = colors.Normalize(vmin=vmin, vmax=vmax)
+    sc = cm.ScalarMappable(norm=norm, cmap=cmap)
+    return sc
 
 def get_cmap(cmap):
 
