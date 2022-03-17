@@ -489,7 +489,7 @@ class RasterInfo:
     epsg: int, optional
         EPSG code for input geographic data. Default: None.
     match: bool, optional
-        Find an approximate match using FindMatches. Default: False.
+        Find an approximate match using FindMatches. Default: True.
     islice: slice, optional
         Slice object specifying image rows to subset.
     jslice: slice, optional
@@ -497,7 +497,7 @@ class RasterInfo:
     """
 
     def __init__(self, rasterfile=None, stackfile=None, X=None, Y=None,
-                 band=1, epsg=None, match=False, islice=None, jslice=None):
+                 band=1, epsg=None, match=True, islice=None, jslice=None):
         """
         Initialize attributes.
         """
