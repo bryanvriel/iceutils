@@ -85,6 +85,8 @@ class Raster:
         bounding box to subset.
     gdalOpts: dict, optional
         Dictionary of extra gdal.TranslateOptions kwargs. Default: None.
+    gdalMatch: bool, optional
+        Find approximate projection info. Default: True.
     """
 
     def __init__(self,
@@ -93,7 +95,7 @@ class Raster:
                  rasterfile=None, band=1,
                  stackfile=None, h5path=None,
                  islice=None, jslice=None,
-                 projWin=None, gdalOpts={}):
+                 projWin=None, gdalOpts={}, gdalMatch=True):
 
         # If data and header are provided, save them and return
         if data is not None and hdr is not None:
@@ -113,7 +115,8 @@ class Raster:
         # Load raster data and do any subsetting using GDAL directly
         if rasterfile is not None:
             self.data, self.hdr = self.load_gdal(rasterfile, band=band, projWin=projWin,
-                                                 islice=islice, jslice=jslice, **gdalOpts)
+                                                 islice=islice, jslice=jslice,
+                                                 gdalMatch=gdalMatch, **gdalOpts)
         elif stackfile is not None:
             assert h5path is not None
             # Load the header info manually
@@ -135,7 +138,8 @@ class Raster:
         return
 
     @staticmethod
-    def load_gdal(filename, band=1, projWin=None, islice=None, jslice=None, **gdalOpts):
+    def load_gdal(filename, band=1, projWin=None, islice=None, jslice=None,
+                  gdalMatch=True, **gdalOpts):
         """
         Load GDAL raster data from file.
 
@@ -151,6 +155,8 @@ class Raster:
             Slice object specifying image rows to subset.
         jslice: slice, optional
             Slice object specifying image columns to subset.
+        gdalMatch: bool, optional
+            Find approximate projection info. Default: True.
         gdalOpts: **kwargs
             Extra kwargs for gdal.TranslateOptions (see https://gdal.org/python/osgeo.gdal-module.html#TranslateOptions) for complete list of options.
 
@@ -178,7 +184,7 @@ class Raster:
         mem_ds = gdal.Translate('/vsimem/temp.tif', dset, options=opts)
 
         # Load RasterInfo
-        hdr = RasterInfo('/vsimem/temp.tif')
+        hdr = RasterInfo('/vsimem/temp.tif', match=gdalMatch)
 
         # Convert to Numy array
         d = mem_ds.ReadAsArray()
