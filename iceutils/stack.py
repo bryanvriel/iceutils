@@ -247,7 +247,7 @@ class Stack:
         # Done
         return data
 
-    def resample(self, ref_hdr, output, key='data', dtype='f', chunks=None):
+    def resample(self, ref_hdr, output, key='data', dtype='f', order=3, chunks=None):
         """
         Resample dataset from one coordinate system to another provided by a
         RasterInfo object.
@@ -271,7 +271,8 @@ class Stack:
         # Loop over slices and interpolate
         for k in tqdm(range(self.Nt)):
             d = self.slice(k, key=key)
-            d_interp = interpolate_array(d, self.hdr, None, None, ref_hdr=ref_hdr)
+            d_interp = interpolate_array(d, self.hdr, None, None,
+                                         order=order, ref_hdr=ref_hdr)
             output.set_slice(k, d_interp, key=key)
 
         # Done
