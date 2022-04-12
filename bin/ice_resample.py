@@ -22,6 +22,8 @@ def parse():
                         help='GDAL driver. Default: ENVI.')
     parser.add_argument('-b', action='store', type=int, default=1, dest='band',
                         help='Raster band to resample. Default: 1.')
+    parser.add_argument('-order', action='store', type=int, default=3,
+                        help='Interpolation order. Default: 3.')
     parser.add_argument('-keys', action='store', type=str, nargs='+', default=['data', 'weights'],
         help='List of stack keys to resample. Default: data, weights.')
     return parser.parse_args()
@@ -72,7 +74,7 @@ def main(args):
         else:
             print('Warping from %d to %d' % (in_epsg, out_epsg))
             inobj = ice.warp(inobj, target_epsg=out_epsg, target_hdr=ref_hdr,
-                             order=3, mode='constant', cval=np.nan)
+                             order=args.order, mode='constant', cval=np.nan)
 
         # Write to disk
         inobj.write_gdal(args.output, epsg=out_epsg, driver=args.driver)
