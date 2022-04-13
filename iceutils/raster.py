@@ -1570,9 +1570,14 @@ def wkt_to_epsg(wkt, match=False):
     """
     proj = osr.SpatialReference(wkt=wkt)
     if match:
-        match_proj = proj.FindMatches()[0][0]
-        match_proj.AutoIdentifyEPSG()
-        epsg = int(match_proj.GetAttrValue('AUTHORITY', 1))
+        try:
+            match_proj = proj.FindMatches()[0][0]
+            match_proj.AutoIdentifyEPSG()
+            epsg = int(match_proj.GetAttrValue('AUTHORITY', 1))
+        except IndexError:
+            # Match may fail; fall back to auto-identification
+            proj.AutoIdentifyEPSG()
+            epsg = int(proj.GetAttrValue('AUTHORITY', 1))
     else: 
         proj.AutoIdentifyEPSG()
         epsg = int(proj.GetAttrValue('AUTHORITY', 1))
