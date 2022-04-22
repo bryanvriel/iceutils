@@ -44,6 +44,7 @@ gdal_type_to_str = {
 
 # Map from numpy dtype to GDAL data type
 numpy_to_gdal_type = {
+    '|b1': gdal.GDT_Byte,
     '|i1': gdal.GDT_Byte,
     '<i2': gdal.GDT_Int16,
     '<i4': gdal.GDT_Int32,
