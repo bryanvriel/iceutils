@@ -29,6 +29,53 @@ def get_cmap(cmap):
 
     return cmap
 
+def annotate_arrow_scale(ax, xlim, ylim, arrow_coords, scale_coords,
+                         arrow_pad=0.03, scale_pad=0.03,
+                         arrow_length=150, scale_length=200, epsg=3031):
+    """
+    Add North arrow and scale bar to an axis for Cartesian coordinates. 
+    """
+    import numpy as np
+    from .boundary import transform_coordinates
+
+    xmin, xmax = xlim
+    ymin, ymax = ylim
+    x_span = xmax - xmin
+    y_span = ymax - ymin
+
+    # Determine north direction
+    x_mid = 1000 * (xmin + 0.5 * x_span)
+    y_mid = 1000 * (ymin + 0.5 * y_span)
+    lon_mid, lat_mid = transform_coordinates(x_mid, y_mid, epsg_in=epsg, epsg_out=4326)
+    x_up, y_up = transform_coordinates(lon_mid, lat_mid + 0.1, epsg_in=4326, epsg_out=epsg)
+    δx = np.array([x_up - x_mid, y_up - y_mid])
+    δxn = δx / np.linalg.norm(δx)
+    rot_angle = np.arctan2(y_up - y_mid, x_up - x_mid)
+    x0 = xmin + arrow_coords[0] * x_span
+    y0 = ymin + arrow_coords[1] * y_span
+    x1 = x0 + arrow_length * δxn[0]
+    y1 = y0 + arrow_length * δxn[1]
+
+    # Draw an arrow
+    #ax.annotate('', xy=(x1, y1), xytext=(x0, y0), xycoords='data', textcoords='data',
+    #            arrowprops={'facecolor': 'k', 'headwidth': 10, 'width': 3},
+    #            zorder=50)
+    ax.annotate('', xy=(x1, y1), xytext=(x0, y0), xycoords='data', textcoords='data',
+                arrowprops={'arrowstyle': '->,head_length=0.8,head_width=0.4'},
+                zorder=50)
+    ax.annotate('N', xy=(0.5 * (x1 + x0), 0.5 * (y1 + y0) + arrow_pad * y_span),
+                xycoords='data', size=14, weight='semibold')
+
+    # Scale bar
+    y0 = y1 = ymin + scale_coords[1] * y_span
+    x0 = xmin + scale_coords[0] * x_span
+    x1 = x0 + scale_length
+    ax.annotate('', xy=(x1, y1), xytext=(x0, y0), xycoords='data', textcoords='data',
+                arrowprops={'arrowstyle': '|-|,widthA=0.5,widthB=0.5'},
+                zorder=51)
+    ax.annotate('%d km' % scale_length, xy=(0.5 * (x0 + x1), y0 - scale_pad * y_span),
+                xycoords='data', horizontalalignment='center', size=14)
+
 # --------------------------------------------------------------------------------
 # The following GMT colormap data is from matplotlib.cm
 # --------------------------------------------------------------------------------
