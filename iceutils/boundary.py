@@ -73,7 +73,7 @@ class Boundary:
         raise ValueError('Cannot set y-points')
 
 
-def smoothe_line(x, y, path_smooth=False, n=200, s=1.0, scale=1.0):
+def smoothe_line(x, y, path_smooth=False, n=200, s=1.0, ds=None, scale=1.0):
     """
     Smoothe a horizontal line with a smoothing spline.
 
@@ -90,6 +90,8 @@ def smoothe_line(x, y, path_smooth=False, n=200, s=1.0, scale=1.0):
         Number of evenly spaced points for output line. Default: 200.
     s: float, optional
         Spline smoothing factor. Default: 1.0.
+    ds: float, optional
+        Characteristic spacing for path smoothing if n is None. Default: None.
     scale: float, optional
         Pre-scaling factor. Useful for reducing data dynamic range. Default: 1.0.
 
@@ -104,6 +106,8 @@ def smoothe_line(x, y, path_smooth=False, n=200, s=1.0, scale=1.0):
 
         # Path coordinates
         sp = compute_path_length(scale*x, scale*y)
+        if n is None and ds is not None:
+            n = int(np.ceil((sp[-1] - sp[0]) / (scale*ds)))
         sgrid = np.linspace(sp[0], sp[-1], n)
 
         # Smooth X
@@ -387,6 +391,24 @@ def extract_perpendicular_transects(x, y, raster, W=15.0e3, N=100, N_perp=100,
 
     else:
         return out
+
+
+def longitude_to_utmzone(lon):
+    """
+    Get utm zone from longitude.
+    """
+    return int(np.floor((lon + 180.0) / 6.0)) % 60 + 1
+
+
+def latlon_to_epsg(lat, lon):
+    """
+    Get EPSG integer from latitude and longitude.
+    """
+    zone = longitude_to_utmzone(lon)
+    if lat >= 0.0:
+        return 32600 + zone
+    else:
+        return 32700 + zone
 
 
 # end of file    
