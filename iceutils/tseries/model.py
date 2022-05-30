@@ -38,7 +38,7 @@ class Model:
 
         # Save the time array
         self.t = t
-        self.tdec = np.array([datestr2tdec(pydtime=date) for date in t])
+        self.tdec = np.array([datestr2tdec(dateobj=date) for date in t])
 
         # Evaluate the collection
         self.G = self.collection(t)
@@ -276,8 +276,8 @@ def build_temporal_model(t, poly=1, periods=[0.5, 1.0], isplines=[32, 16, 8, 4],
 
     # Get time bounds
     tstart, tend = dates[0], dates[-1]
-    tdec_start = datestr2tdec(pydtime=tstart)
-    tdec_end = datestr2tdec(pydtime=tend)
+    tdec_start = datestr2tdec(dateobj=tstart)
+    tdec_end = datestr2tdec(dateobj=tend)
 
     # Initalize a collection and relevant basis functions
     collection = timefn.TimefnCollection()
