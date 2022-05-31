@@ -36,7 +36,8 @@ def parse():
     parser.add_argument('-sigma', action='store_true',
         help='Plot errobars using weights dataset.')
     parser.add_argument('-frame', action='store', type=str, default='initial',
-        help='Type of stat to use for displaying map (mean, initial, final, std). Default: initial.')
+        help="""Type of stat to use for displaying map (mean, initial, final, std).
+                Alternatively, may supply key to 2D dataset. Default: initial.""")
     return parser.parse_args()
 
 def main(args):
@@ -54,7 +55,10 @@ def main(args):
     elif args.frame == 'std':
         mean = stack.std(key=args.key)
     else:
-        raise ValueError('Unsupported frame type.')
+        try:
+            mean = stack[args.frame][()]
+        except KeyError:
+            raise ValueError('Unsupported frame type.')
 
     # If model directory is given, load model stack (full fit)
     mstack = None
