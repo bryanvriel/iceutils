@@ -98,6 +98,9 @@ class Raster:
                  islice=None, jslice=None,
                  projWin=None, gdalOpts={}, gdalMatch=True):
 
+        # Default no data value
+        self.nodataval = 0
+
         # If data and header are provided, save them and return
         if data is not None and hdr is not None:
             self.data = data
@@ -115,9 +118,11 @@ class Raster:
 
         # Load raster data and do any subsetting using GDAL directly
         if rasterfile is not None:
-            self.data, self.hdr = self.load_gdal(rasterfile, band=band, projWin=projWin,
-                                                 islice=islice, jslice=jslice,
-                                                 gdalMatch=gdalMatch, **gdalOpts)
+            self.data, self.hdr, self.nodataval = self.load_gdal(
+                rasterfile, band=band, projWin=projWin,
+                islice=islice, jslice=jslice,
+                gdalMatch=gdalMatch, **gdalOpts
+            )
         elif stackfile is not None:
             assert h5path is not None
             # Load the header info manually
@@ -169,6 +174,9 @@ class Raster:
         # Open dataset
         dset = gdal.Open(filename, gdal.GA_ReadOnly)
 
+        # Get no-data value
+        nodataval = dset.GetRasterBand(band).GetNoDataValue()
+
         # Compute srcWin if no projWin given and islice/jslice given
         srcWin = None
         if projWin is None and islice is not None and jslice is not None:
@@ -196,7 +204,7 @@ class Raster:
         mem_ds = None
 
         # Return array
-        return d, hdr
+        return d, hdr, nodataval
 
     @staticmethod
     def load_hdf5(filename, h5path, islice=None, jslice=None):
