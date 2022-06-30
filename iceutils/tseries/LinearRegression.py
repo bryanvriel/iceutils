@@ -5,7 +5,8 @@ import functools
 import numpy as np
 from ..matutils import dmultl
 from cvxopt import solvers, matrix, sparse, spmatrix, log, div, blas
-from sklearn.linear_model import orthogonal_mp_gram, RANSACRegressor
+from sklearn.linear_model import orthogonal_mp_gram, RANSACRegressor, \
+                                 LinearRegression as sk_LinearRegression
 import sys
 solvers.options['show_progress'] = False
 
@@ -20,7 +21,7 @@ def select_solver(solver_type, reg_indices=None, rw_iter=1, regMat=None, robust=
     Parameters
     ----------
     solver_type: str,
-        Name of solver from ('lasso', 'ridge', 'omp', 'lsqr').
+        Name of solver from ('lasso', 'ridge', 'omp', 'ransac', 'lsqr').
     reg_indices: array_like, optional
         Integer indices for elements to be regularized. Default: None.
     rw_iter: int, optional
@@ -57,6 +58,8 @@ def select_solver(solver_type, reg_indices=None, rw_iter=1, regMat=None, robust=
     elif solver_type == 'omp':
         solver = OrthogonalMatchingPursuit(n_nonzero_coefs=n_nonzero_coefs, regMat=regMat,
                                            n_min=n_min)
+    elif solver_type == 'ransac':
+        solver = LinearRegression(robust=True, n_min=n_min)
     elif solver_type == 'lsqr':
         solver = LinearRegression(robust=robust, n_min=n_min)
 
@@ -77,7 +80,8 @@ class LinearRegression:
         self.robust = robust
         self.n_min = n_min
         if robust:
-            self.ransac = RANSACRegressor(min_samples=10)
+            estimator = sk_LinearRegression(fit_intercept=False)
+            self.ransac = RANSACRegressor(estimator=estimator, min_samples=10)
 
         # Cache operator for computing array inverses
         if pinv:
@@ -85,7 +89,7 @@ class LinearRegression:
         else:
             self.inv_func = np.linalg.inv
 
-    def invert(self, G, d, wgt=None):
+    def invert(self, G, d, wgt=None, mask=None):
         """
         Simple wrapper around numpy.linalg.lstsq.
 
@@ -97,6 +101,8 @@ class LinearRegression:
             Input data.
         wgt: (M,) np.ndarray, optional
             Optional weights for the data.
+        mask: np.ndarray, optional
+            Array of indices to use for inversion. Default: None.
 
         Returns
         -------
@@ -108,11 +114,21 @@ class LinearRegression:
             Weights for parameters.
         """
         # Indices for finite data
-        mask = np.isfinite(d).nonzero()[0]
+        if mask is None:
+            mask = np.isfinite(d).nonzero()[0]
         if mask.size < self.n_min:
             warnings.warn('Not enough data for inversion. Returning None.')
             return FAIL, None, None
         Gf, df, wgt = self.apply_mask(mask, G, d, wgt=wgt)
+
+        # If doing an inversion with RANSAC, use directly in order to maintain
+        # a design matrix with M data poitns
+        if self.robust:
+            self.ransac.fit(Gf, df)
+            m = self.ransac.estimator_.coef_
+            G_in = Gf[self.ransac.inlier_mask_, :]
+            GtG = np.dot(G_in.T, G_in)
+            return SUCCESS, m, self.inv_func(GtG)
         
         # Prepare least squares data
         if wgt is not None:
@@ -124,12 +140,7 @@ class LinearRegression:
         iGtG = self.inv_func(GtG)
 
         # Perform inversion
-        if self.robust:
-            m = self.ransac.fit(GtG, Gtd)
-            outlier_mask = np.logical_not(self.ransac.inlier_mask_)
-            d[outlier_mask] = np.nan
-        else:
-            m = np.dot(iGtG, Gtd)
+        m = np.dot(iGtG, Gtd)
         return SUCCESS, m, iGtG
 
     @staticmethod
@@ -168,7 +179,7 @@ class RidgeRegression(LinearRegression):
         return
 
 
-    def invert(self, G, d, wgt=None):
+    def invert(self, G, d, wgt=None, mask=None):
         """
         Perform inversion.
         Simple wrapper around numpy.linalg.lstsq.
@@ -181,6 +192,8 @@ class RidgeRegression(LinearRegression):
             Input data.
         wgt: (M,) np.ndarray, optional
             Optional weights for the data.
+        mask: np.ndarray, optional
+            Array of indices to use for inversion. Default: None.
 
         Returns
         -------
@@ -192,7 +205,8 @@ class RidgeRegression(LinearRegression):
             Weights for parameters.
         """
         # Indices for finite data
-        mask = np.isfinite(d).nonzero()[0]
+        if mask is None:
+            mask = np.isfinite(d).nonzero()[0]
         if mask.size < self.n_min:
             warnings.warn('Not enough data for inversion. Returning None.')
             return FAIL, None, None
@@ -261,7 +275,7 @@ class LassoRegression(LinearRegression):
         return
 
 
-    def invert(self, G, d, wgt=None):
+    def invert(self, G, d, wgt=None, mask=None):
         """
         Perform inversion.
 
@@ -273,6 +287,8 @@ class LassoRegression(LinearRegression):
             Input data.
         wgt: (M,) np.ndarray, optional
             Optional weights for the data.
+        mask: np.ndarray, optional
+            Array of indices to use for inversion. Default: None.
 
         Returns
         -------
@@ -284,7 +300,8 @@ class LassoRegression(LinearRegression):
             Weights for parameters.
         """
         # Indices for finite data
-        mask = np.isfinite(d).nonzero()[0]
+        if mask is None:
+            mask = np.isfinite(d).nonzero()[0]
         if mask.size < self.n_min:
             warnings.warn('Not enough data for inversion. Returning None.')
             return FAIL, None, None
@@ -482,7 +499,7 @@ class OrthogonalMatchingPursuit(LinearRegression):
         self.regMat = regMat 
 
 
-    def invert(self, G, d, wgt=None):
+    def invert(self, G, d, wgt=None, mask=None):
         """
         Perform inversion.
 
@@ -494,6 +511,8 @@ class OrthogonalMatchingPursuit(LinearRegression):
             Input data.
         wgt: (M,) np.ndarray, optional
             Optional weights for the data.
+        mask: np.ndarray, optional
+            Array of indices to use for inversion. Default: None.
 
         Returns
         -------
@@ -505,7 +524,8 @@ class OrthogonalMatchingPursuit(LinearRegression):
             Weights for parameters.
         """
         # Indices for finite data
-        mask = np.isfinite(d).nonzero()[0]
+        if mask is None:
+            mask = np.isfinite(d).nonzero()[0]
         if mask.size < self.n_min:
             warnings.warn('Not enough data for inversion. Returning None.')
             return FAIL, None, None
