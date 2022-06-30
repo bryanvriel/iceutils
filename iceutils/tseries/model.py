@@ -231,7 +231,7 @@ def predict(stack_list, time_index, name='recon', islice=None, jslice=None):
     return fit
 
 
-def build_temporal_model(t, poly=1, periods=[0.5, 1.0], isplines=[32, 16, 8, 4],
+def build_temporal_model(t, poly=1, min_poly=0, periods=[0.5, 1.0], isplines=[32, 16, 8, 4],
                          bsplines=None, seasonal_bspline_sep=None, userfile=None):
     """
     Convenience function to build a temporal model from commonly-used pieces. Can alternatively
@@ -242,7 +242,9 @@ def build_temporal_model(t, poly=1, periods=[0.5, 1.0], isplines=[32, 16, 8, 4],
     t: (N,) array
         Array of datetime or decimal years corresponding to time epochs.
     poly: int, optional
-        Order of polynomial to include. Default: 1.
+        Maximum order of polynomial to include. Default: 1.
+    min_poly: int, optional
+        Minimum order of polynomial to include. Default: 0.
     periods: list, optional
         Periods (in years) of sinusoidal components to include. Default: [0.5, 1.0].
     isplines: list, optional
@@ -288,7 +290,8 @@ def build_temporal_model(t, poly=1, periods=[0.5, 1.0], isplines=[32, 16, 8, 4],
     polyfn = timefn.fnmap['poly']
 
     # Polynomial first
-    collection.append(polyfn(tref=tstart, order=poly, units='years'))
+    min_poly = min(min_poly, poly)
+    collection.append(polyfn(tref=tstart, order=poly, minorder=min_poly, units='years'))
 
     # Seasonal terms
     periods = periods or []
