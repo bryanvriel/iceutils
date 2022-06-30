@@ -19,12 +19,14 @@ def parse():
         Explore time series tack""")
     parser.add_argument('stackfile', type=str,
         help='Input stack file to display.')
-    parser.add_argument('-mfile', action='store', type=str, default=None,
-        help='Model stack file. Default: None.')
     parser.add_argument('-key', action='store', type=str, default='data',
         help='Dataset to view. Default: data.')
+    parser.add_argument('-mfile', action='store', type=str, default=None,
+        help='Model stack file. Default: None.')
     parser.add_argument('-mkey', action='store', type=str, default='data',
         help='Model dataset view. Default: data.')
+    parser.add_argument('-mtdec', action='store', type=str, default='tdec',
+        help='Model time vector. Default: tdec.')
     parser.add_argument('-ref', action='store', type=str, default=None,
         help='Reference SAR raster for background. Default: None.')
     parser.add_argument('-alpha', action='store', type=float, default=1.0,
@@ -36,8 +38,10 @@ def parse():
     parser.add_argument('-sigma', action='store_true',
         help='Plot errobars using weights dataset.')
     parser.add_argument('-frame', action='store', type=str, default='initial',
-        help="""Type of stat to use for displaying map (mean, initial, final, std).
-                Alternatively, may supply key to 2D dataset. Default: initial.""")
+        help="""
+            Type of stat to use for displaying map (mean, initial, final, std).
+            Alternatively, may supply an integer index as index_{index} or key to 2D dataset.
+            Default: initial.""")
     return parser.parse_args()
 
 def main(args):
@@ -54,6 +58,9 @@ def main(args):
         mean = stack.mean(key=args.key)
     elif args.frame == 'std':
         mean = stack.std(key=args.key)
+    elif args.frame.startswith('index_'):
+        ind = int(args.frame.split('_')[1])
+        mean = stack.slice(ind, key=args.key)
     else:
         try:
             mean = stack[args.frame][()]
@@ -64,6 +71,10 @@ def main(args):
     mstack = None
     if args.mfile is not None:
         mstack = ice.Stack(args.mfile)
+        if args.mtdec != 'tdec':
+            mtdec = mstack[args.mtdec][()]
+        else:
+            mtdec = mstack.tdec
 
     # Load reference SAR image
     if args.ref is not None:
@@ -114,14 +125,15 @@ def main(args):
             sigma = 1.0 / w
             axts.errorbar(stack.tdec, d, yerr=sigma, fmt='o')
         else:
-            axts.plot(stack.tdec, d, 'o')
+            axts.plot(stack.tdec, d, 'o', label=args.key)
 
         if mstack is not None:
             fit = mstack.timeseries(xy=(x, y), key=args.mkey)
-            axts.plot(mstack.tdec, fit, 'o')
+            axts.plot(mtdec, fit, 'o', label='model ' + args.mkey)
 
         axts.set_xlabel('Year')
         axts.set_ylabel('Velocity')
+        axts.legend(loc='best')
 
         pts.canvas.draw()
 
