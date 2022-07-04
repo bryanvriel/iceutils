@@ -19,7 +19,8 @@ except ImportError:
 # tseries requires cvxopt, scikit-learn, and pint
 try:
     from . import tseries
-except ImportError:
+except ImportError as err:
+    print(err)
     pass
 
 # Other submodules
