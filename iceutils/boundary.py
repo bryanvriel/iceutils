@@ -255,6 +255,10 @@ def transform_coordinates(x_in, y_in, epsg_in=None, epsg_out=None, proj_in=None,
         proj_in = pyproj.Proj('EPSG:%d' % epsg_in)
         proj_out = pyproj.Proj('EPSG:%d' % epsg_out)
 
+    # If projections are the same, simply return the inputs
+    if proj_in == proj_out:
+        return x_in, y_in
+
     # Perform transformation
     return pyproj.transform(proj_in, proj_out, x_in, y_in, always_xy=True)
 
