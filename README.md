@@ -16,11 +16,16 @@ scikit-learn (optional)
 pint (optional)
 cvxopt (optional)
 ```
-All of the packages can be installed via Anaconda using the `conda-forge` channel. Also note that optional packages `scikit-learn`, `pint`, and `cvxopt` are only necessary for using the `iceutils.tseries` module. Additionally, `opencv` is only needed for the `iceutils.correlate` module and some isolated inpainting routines. The installation process can be streamlined by copying the necessary packages and any optional packages into a text file (e.g., `requirements.txt`) and running:
+All of the packages can be installed via Anaconda using the `conda-forge` channel. Also note that optional packages `scikit-learn`, `pint`, and `cvxopt` are only necessary for using the `iceutils.tseries` module. Additionally, `opencv` is only needed for the `iceutils.correlate` module and some isolated inpainting routines. The installation process can be streamlined using the files `requirements_base.txt` and `requirements_extra.txt`:
 
 ```
-conda install -c conda-forge --file requirements.txt
+# Install only base requirements
+conda install -c conda-forge --file=requirements_base.txt
+
+# Or install all requirements
+conda install -c conda-forge --file=requirements_base.txt --file=requirements_extra.txt
 ```
+
 If you are using the main Anaconda channel, you'll likely have to install `pint` with pip:
 
 ```
