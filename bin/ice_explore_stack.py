@@ -67,10 +67,24 @@ def main(args):
         except KeyError:
             raise ValueError('Unsupported frame type.')
 
+    # Check time array shape
+    ds_shape = stack[args.key].shape
+    if stack.fmt == 'NHW':
+        Nt = ds_shape[0]
+    elif stack.fmt == 'HWN':
+        Nt = ds_shape[2]
+    if Nt != stack.tdec.size:
+        tdec = np.arange(Nt)
+        tlabel = 'Index'
+    else:
+        tdec = stack.tdec
+        tlabel = 'Year'
+    
     # If model directory is given, load model stack (full fit)
     mstack = None
     if args.mfile is not None:
         mstack = ice.Stack(args.mfile)
+        # Load correct time array
         if args.mtdec != 'tdec':
             mtdec = mstack[args.mtdec][()]
         else:
@@ -123,16 +137,16 @@ def main(args):
         if args.sigma:
             w = stack.timeseries(xy=(x, y), key='weights')
             sigma = 1.0 / w
-            axts.errorbar(stack.tdec, d, yerr=sigma, fmt='o')
+            axts.errorbar(tdec, d, yerr=sigma, fmt='o')
         else:
-            axts.plot(stack.tdec, d, 'o', label=args.key)
+            axts.plot(tdec, d, 'o', label=args.key)
 
         if mstack is not None:
             fit = mstack.timeseries(xy=(x, y), key=args.mkey)
             axts.plot(mtdec, fit, 'o', label='model ' + args.mkey)
 
-        axts.set_xlabel('Year')
-        axts.set_ylabel('Velocity')
+        axts.set_xlabel(tlabel)
+        axts.set_ylabel(args.key)
         axts.legend(loc='best')
 
         pts.canvas.draw()
