@@ -231,8 +231,9 @@ def predict(stack_list, time_index, name='recon', islice=None, jslice=None):
     return fit
 
 
-def build_temporal_model(t, poly=1, min_poly=0, periods=[0.5, 1.0], isplines=[32, 16, 8, 4],
-                         bsplines=None, seasonal_bspline_sep=None, userfile=None):
+def build_temporal_model(t, poly=1, min_poly=0, periods=[0.5, 1.0], steps=[],
+                         isplines=[32, 16, 8, 4], bsplines=None, seasonal_bspline_sep=None,
+                         userfile=None):
     """
     Convenience function to build a temporal model from commonly-used pieces. Can alternatively
     build the model by reading in relevant code from an external file.
@@ -247,6 +248,8 @@ def build_temporal_model(t, poly=1, min_poly=0, periods=[0.5, 1.0], isplines=[32
         Minimum order of polynomial to include. Default: 0.
     periods: list, optional
         Periods (in years) of sinusoidal components to include. Default: [0.5, 1.0].
+    steps: list, optional
+        Time epochs to include step functions. Default: [].
     isplines: list, optional
         I-splines to include. Default: [32, 16, 8, 4].
     bsplines: list, optional
@@ -288,6 +291,7 @@ def build_temporal_model(t, poly=1, min_poly=0, periods=[0.5, 1.0], isplines=[32
     bspline = timefn.fnmap['bsplineset']
     single_bspl = timefn.fnmap['bspline']
     polyfn = timefn.fnmap['poly']
+    stepfn = timefn.fnmap['constant']
 
     # Polynomial first
     min_poly = min(min_poly, poly)
@@ -298,6 +302,10 @@ def build_temporal_model(t, poly=1, min_poly=0, periods=[0.5, 1.0], isplines=[32
     for period in periods:
         collection.append(periodic(tref=tstart, units='years', period=period,
                                    tmin=tstart, tmax=tend))
+
+    # Steps
+    for step in steps:
+        collection.append(stepfn(tmin=step))
 
     # B-splines
     bsplines = bsplines or []
