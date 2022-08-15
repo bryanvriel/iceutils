@@ -389,4 +389,112 @@ class LateralIceStream:
         return cdict
 
 
+class IceShelf:
+
+    def __init__(self, profile, calving_force, A, n=3, W=30.0e3, bv_scale=5000.0, scale=1.0e-3):
+        """
+        Initialize IceStream class.
+        """
+        # Save the profile object
+        self.profile = profile
+
+        # Physical parameters
+        self.g = 9.80665
+        self.n = n
+        self.rho_ice = profile.rho_ice
+        self.rho_water = profile.rho_water
+        self.W = W
+        self.A = A
+
+        # Numerical parameters
+        self.boundary_value_scale = bv_scale
+        self.scale = scale
+
+        # In-flow and outflow velocities for kinematic boundary condition
+        self.u_inflow = profile.u[0]
+        self.u_outflow = profile.u[-1]
+
+        # The force at the calving front
+        self.fs = calving_force
+
+        # Initialize jacobian function
+        self.fjac = jax.jacfwd(self.compute_pde_values, 0)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def compute_pde_values(self, u):
+        """
+        Compute vector of PDE residuals for a given velocity profile.
+        
+        Parameters
+        ----------
+        u: (N,) ndarray
+            Array of ice velocity in m/yr.
+
+        Returns
+        ------- 
+        F: (N+2,) ndarray
+            Array of PDE residuals. Returned if return_components = False.
+        """
+
+        # Cache some parameters to use here
+        g, n, A, scale = [getattr(self, attr) for attr in ('g', 'n', 'A', 'scale')]
+
+        # Cache some variables from the profile
+        D, h, alpha, N = [getattr(self.profile, attr) for attr in ('D', 'h', 'alpha', 'A', 'N')]
+
+        # Allocate array for vector result
+        F = jnp.zeros(N + 2)
+
+        # Compute gradient of velocity profile
+        Du = jnp.dot(D, u)
+
+        # Dynamic viscosity
+        strain = jnp.abs(Du) + 1.0e-5
+        nu = A**(-1 / n) / (strain**((n - 1) / n))
+
+        # Membrane stresses
+        membrane = scale * 2.0 * jnp.dot(D, h * nu * Du)
+
+        # Lateral drag
+        absu = jnp.abs(u)
+        usign = u / absu
+        lateral = scale * 2.0 * usign * h / self.W * (5 * absu / (A * self.W))**(1.0 / n)
+
+        # Driving stress
+        Td = scale * self.rho_ice * g * h * alpha
+
+        # Compute boundary conditions
+        b1 = self.boundary_value_scale * (u[0] - self.u_inflow)
+        #b2 = self.boundary_value_scale * (Du[-1] - self.fs)
+        b2 = self.boundary_value_scale * (u[-1] - self.u_outflow)
+
+        # Fill out PDE residual array
+        stress = membrane - lateral + Td
+        F1 = jax.ops.index_update(F, slice(0, N), stress)
+        F2 = jax.ops.index_update(F1, slice(N, N + 2), [b1, b2])
+
+        # Done
+        return F2
+
+    @partial(jax.jit, static_argnums=(0,))
+    def compute_jacobian(self, u):
+        """ 
+        Compute Jacobian of residual array with respect to a given velocity array.
+                    
+        Parameters
+        ----------
+        u: (N,) ndarray
+            Array of ice velocity in m/yr.
+        
+        Returns
+        -------
+        J: (N+2, N+2) ndarray
+            2D Jacobian array.
+        """
+        # Pass arguments to jacobian function
+        J = self.fjac(u)
+        # Done
+        return J
+
+
 # end of file
