@@ -14,7 +14,7 @@ import sys
 
 class Profile:
 
-    def __init__(self, x, h, b, u, rho_ice=917.0, rho_water=1024.0, t=0.0):
+    def __init__(self, x, h, b, u, rho_ice=917.0, rho_water=1024.0, t=0.0, shelf=False):
         """
         Stores profiles of DOWNSTREAM distance:
 
@@ -39,6 +39,8 @@ class Profile:
             Ocean water density in kg/m^3. Default: 1024.
         t: float, optional
             Time associated with profile data.
+        shelf: bool, optional
+            Data represent floating ice. Compute equivalent bed assuming buoyancy.
 
         Returns
         -------
@@ -47,6 +49,7 @@ class Profile:
         # Store the data
         self.x = x
         self.h = h
+        self.shelf = shelf
         self.b = b
         self.u = u
         self.rho_water, self.rho_ice = rho_water, rho_ice
@@ -68,7 +71,11 @@ class Profile:
         Private function for computing quantities depending on the thickness profile.
         """
         # Ice surface
-        self.s = self.b + self.h
+        if self.shelf:
+            self.s = self.h * (1 - self.rho_ice / self.rho_water)
+            self.b = -self.h * self.rho_ice / self.rho_water
+        else:
+            self.s = self.b + self.h
         # Bed depth
         self.depth = -1.0 * self.b
         # Surface slope
