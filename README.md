@@ -116,7 +116,12 @@ To dump raster data to a file, we use the `Raster.write_gdal` function:
 ```python
 raster.write_gdal('output.dat', driver='ENVI', epsg=3413)
 ```
-Any GDAL-compatible driver can be passed to the `driver` keyword argument. Additionally, one can pass in an EPSG code to specify the coordinate system of the data in order for GDAL to write relevant projection data.
+Any GDAL-compatible driver can be passed to the `driver` keyword argument (e.g., `'GTiff'`, `'ISCE'`, `'GMT'`, etc.). Additionally, one can pass in an EPSG code to specify the coordinate system of the data in order for GDAL to write relevant projection data (as shown in the example above; if `epsg=None`, the EPSG code is retrieved from the `hdr` attribute of the raster).
+
+Alternatively, we can write a NumPy array directly to a raster if we have an associated `RasterInfo` object.
+```
+ice.write_array_as_raster(array, hdr, 'output.dat', driver='ENVI')
+```
 
 ### Resampling a raster to the region of another raster (with same projection)
 
