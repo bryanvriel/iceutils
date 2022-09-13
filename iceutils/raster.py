@@ -1492,6 +1492,58 @@ def inpaint(raster, mask=None, method='spring', r=3.0):
         return Raster(data=inpainted, hdr=raster.hdr)
     else:
         return inpainted
+
+def pad_raster(raster, pad_width, mode='constant', **kwargs):
+    """
+    Pads a raster using np.pad and updates RasterInfo information.
+
+    Parameters
+    ----------
+    raster: Raster
+        Raster to pad.
+    pad_width: {sequence, array_like, int}
+        Number of values padded to the edges of each axis.
+        ((before_1, after_1), ... (before_N, after_N)) unique pad widths
+        for each axis.
+        ((before, after),) yields same before and after pad for each axis.
+        (pad,) or int is a shortcut for before = after = pad width for all
+        axes.
+    mode: str or function, optional
+        Padding mode as defined by np.pad.
+    **kwargs:
+        Extra kwargs passed to np.pad
+
+    Returns
+    -------
+    out_raster: Raster
+        Output padded raster with adjusted geographic info.
+    """
+    def _adjust_coords(coords, pad_before, pad_after):
+        x0 = coords[0]
+        x1 = coords[-1]
+        dx = coords[1] - coords[0]
+        x0_adj = x0 - dx * pad_before
+        x_before = x0_adj + dx * np.arange(pad_before)
+        x_after = x1 + dx + dx * np.arange(pad_after)
+        return np.hstack((x_before, coords, x_after))
+
+    # Unpack pad width in each dimension
+    if isinstance(pad_width, int):
+        xpad_before = xpad_after = ypad_before = ypad_after = pad_width
+    else:
+        (ypad_before, ypad_after), (xpad_before, xpad_after) = pad_width
+
+    # Adjust the coordinates
+    x = _adjust_coords(raster.hdr.xcoords, xpad_before, xpad_after)
+    y = _adjust_coords(raster.hdr.ycoords, ypad_before, ypad_after)
+    X, Y = np.meshgrid(x, y)
+    out_hdr = RasterInfo(X=X, Y=Y, epsg=raster.hdr.epsg)
+
+    # Do the padding
+    data = np.pad(raster.data, pad_width, mode=mode, **kwargs)
+
+    # Return new raster
+    return Raster(data=data, hdr=out_hdr)
         
 def render_kml(raster, filename, dpi=300, cmap='viridis', clim=None, colorbar=False, n_proc=1):
     """
