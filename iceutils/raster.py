@@ -960,6 +960,20 @@ class RasterInfo:
         return np.array([self.ystop, self.ystart])
 
     @property
+    def xspan(self):
+        """
+        Returns spatial span in X direction.
+        """
+        return abs(self.xstop - self.xstart)
+
+    @property
+    def yspan(self):
+        """
+        Returns spatial span in Y direction.
+        """
+        return abs(self.ystart - self.ystop)
+
+    @property
     def xcoords(self):
         """
         Returns array of X coordinates.
