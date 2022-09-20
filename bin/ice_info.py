@@ -8,6 +8,8 @@ import sys
 import os
 
 import iceutils as ice
+import warnings
+warnings.simplefilter('ignore')
 
 def parse():
     parser = argparse.ArgumentParser(description="""
