@@ -2,6 +2,7 @@
 
 import datetime
 import numpy as np
+import time
 import copy
 import math
 import sys
@@ -177,6 +178,24 @@ def generateDateList(start, end, delta):
         result.append(curr)
 
     return result
+
+
+class Timer:
+    """
+    A simple timer class for use in context managers.
+    """
+
+    def __init__(self, desc='Timing context'):
+        self.desc = desc
+
+    def __enter__(self):
+        print(self.desc)
+        self.t0 = time.time()
+        return
+
+    def __exit__(self, *exc_args):
+        tf = time.time()
+        print(' - elapsed time: %f s' % (tf - self.t0))
 
 
 # end of file 
