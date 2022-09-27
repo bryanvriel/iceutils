@@ -8,6 +8,7 @@ from .boundary import *
 from .timeutils import *
 from .matutils import *
 from .constants import *
+from .stats import *
 from .visualization import *
 
 # Correlation requires OpenCV
