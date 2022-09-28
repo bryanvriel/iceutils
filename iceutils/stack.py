@@ -146,9 +146,9 @@ class Stack:
         """
         # Extract the data slice
         if self.fmt == 'NHW':
-            data = self._datasets[key][index, :, :]
+            data = self._datasets[key][index, :, :].squeeze()
         elif self.fmt == 'HWN':
-            data = self._datasets[key][:, :, index]
+            data = self._datasets[key][:, :, index].squeeze()
 
         # Optionally wrap as a raster
         if as_raster:
