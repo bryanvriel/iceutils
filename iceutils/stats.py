@@ -6,8 +6,8 @@ from .boundary import transform_coordinates
 from .raster import get_utm_EPSG
 from tqdm import tqdm
 
-def variogram(raster, projWin=None, max_samples=1000, remove_ramp=True, dist_max=50.0e3,
-              dist_spacing=1.0e3, epsg_in=None, seed=None):
+def variogram(raster, projWin=None, max_samples=1000, remove_ramp=True, measure='semi',
+              dist_max=50.0e3, dist_spacing=1.0e3, epsg_in=None, seed=None):
     """
     Computes semivariogram for a given raster and optional subwindow. Optionally removes
     a ramp prior to computation of the variogram. Adapted from:
@@ -24,6 +24,10 @@ def variogram(raster, projWin=None, max_samples=1000, remove_ramp=True, dist_max
         Maximum number of samples to randomly sample from raster window. Default: 1000.
     remove_ramp: bool, optional
         Remove bilinear ramp prior to computing variogram. Default: True.
+    measure: str, optional
+        Variogram metric to use.
+            - 'semi': (x_i - x_j)**2, default.
+            - 'cov': abs(x_i * x_j)
     dist_max: float, optional
         Maximum distance bin in meters for constructing variogram. Default: 50e3.
     dist_spacing: float, optional
@@ -64,6 +68,10 @@ def variogram(raster, projWin=None, max_samples=1000, remove_ramp=True, dist_max
         epsg_utm = get_utm_EPSG(X[0], Y[0])
         X, Y = transform_coordinates(X, Y, epsg_in=epsg_in, epsg_out=epsg_utm)
 
+    # Keep only finite points
+    mask = np.isfinite(data)
+    X, Y, data = [arr[mask] for arr in (X, Y, data)]
+
     # Randomly sample points
     rng = np.random.default_rng(seed)
     n_samples = min(max_samples, X.size)
@@ -99,7 +107,12 @@ def variogram(raster, projWin=None, max_samples=1000, remove_ramp=True, dist_max
     dist = np.sqrt(dx**2 + dy**2)
 
     # Compute semivariogram
-    dv = (z[ii] - z[jj])**2
+    if measure == 'semi':
+        dv = (z[ii] - z[jj])**2
+    elif measure == 'cov':
+        dv = np.abs(z[ii] * z[jj])
+    else:
+        raise ValueError('Unsupported variogram measure.')
 
     # Digitize
     dist_bins = np.arange(0.0, dist_max, dist_spacing)
