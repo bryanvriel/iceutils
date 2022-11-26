@@ -60,8 +60,8 @@ class IceStream:
 
         # Effective flotation height (any height below flotation is set to a small number)
         Hf = profile.h - self.rho_water / self.rho_ice * profile.depth
-        mask = (Hf < 0.0).nonzero()[0]
-        self.Hf = jax.ops.index_update(Hf, mask, 0.001)
+        #mask = (Hf < 0.0).nonzero()[0]
+        #self.Hf = jax.ops.index_update(Hf, mask, 0.001)
 
         # Initialize jacobian function
         self.fjac = jax.jacfwd(self.compute_pde_values, 0)
@@ -88,9 +88,6 @@ class IceStream:
         # Cache some variables from the profile
         D, h, alpha, N = [getattr(self.profile, attr) for attr in ('D', 'h', 'alpha', 'N')]
 
-        # Allocate array for vector result
-        F = np.zeros(N + 2)
-
         # Compute gradient of velocity profile
         Du = np.dot(D, u) + 1.0e-13 # epsilon to avoid divide-by-zero
 
@@ -109,16 +106,15 @@ class IceStream:
         Td = scale * self.rho_ice * g * h * alpha
 
         # Compute boundary conditions
-        b1 = self.boundary_value_scale * Du[0]
+        b1 = self.boundary_value_scale * u[0]
         b2 = self.boundary_value_scale * (Du[-1] - self.fs)
 
         # Fill out PDE residual array
         stress = membrane - basal + Td
-        F1 = jax.ops.index_update(F, slice(0, N), stress)
-        F2 = jax.ops.index_update(F1, slice(N, N + 2), [b1, b2])
+        F = np.hstack((stress, b1, b2))
 
         # Done
-        return F2
+        return F
 
     @partial(jax.jit, static_argnums=(0,))
     def compute_jacobian(self, u):
