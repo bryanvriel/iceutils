@@ -423,6 +423,12 @@ class Raster:
         else:
             return z
 
+    def __array__(self):
+        """
+        Return underlying raster data numpy array.
+        """
+        return self.data
+
     def __getitem__(self, coord):
         """
         Access data at given coordinates.
