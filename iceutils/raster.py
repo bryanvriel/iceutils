@@ -1,12 +1,17 @@
 #-*- coding: utf-8 -*-
 
 import numpy as np
+import numpy.lib.mixins
+from numbers import Number
+
 from scipy.ndimage import map_coordinates
 from skimage.restoration.inpaint import inpaint_biharmonic
-import warnings
+
 import pyproj
-import h5py
 from osgeo import gdal, osr
+
+import warnings
+import h5py
 import sys
 
 try:
@@ -57,7 +62,10 @@ numpy_to_gdal_type = {
     '<c16': gdal.GDT_CFloat64
 }
 
-class Raster:
+# Dictionary for storing specific Numpy functions for operating on Raster objects
+HANDLED_NP_FUNCTIONS = {}
+
+class Raster(numpy.lib.mixins.NDArrayOperatorsMixin):
     """
     Class that encapsulates raster data and stores an instance of its header info.
 
@@ -431,64 +439,127 @@ class Raster:
 
     def __getitem__(self, coord):
         """
-        Access data at given coordinates.
+        Get raster data at given coordinates/slice.
         """
         i, j = coord
-        return self.data[i,j]
+        return self.data[i, j]
 
-    def __add__(self, other):
+    def __setitem__(self, coord, value):
         """
-        Addition between two rasters.
+        Set raster data at given coordinates/slice.
         """
-        # Check RasterInfo consistency
-        assert self.hdr == other.hdr, 'RasterInfo objects not equal.'
-        # Perform addition and return a new Raster
-        data = self.data + other.data
-        return Raster(data=data, hdr=self.hdr)
+        i, j = coord
+        self.data[i, j] = value
 
-    def __sub__(self, other):
+    def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
         """
-        Subtraction between two rasters.
-        """
-        # Check RasterInfo consistency
-        assert self.hdr == other.hdr, 'RasterInfo objects not equal.'
-        # Perform subtraction and return a new Raster
-        data = self.data - other.data
-        return Raster(data=data, hdr=self.hdr)
+        Implements __array__ufunc__ for Raster objects following:
+        https://numpy.org/doc/stable/user/basics.dispatch.html#basics-dispatch
 
-    def __mul__(self, other):
+        Arguments can be scalars, numpy arrays (w/ compatible shapes), and
+        other Raster objects (w/ compatible hdr).
         """
-        Multiplication between two rasters.
-        """
-        # Check RasterInfo consistency
-        assert self.hdr == other.hdr, 'RasterInfo objects not equal.'
-        # Perform multiplication and return a new Raster
-        data = self.data * other.data
-        return Raster(data=data, hdr=self.hdr)
+        if method == '__call__':
+            scalars = []
+            for input in inputs:
+                if isinstance(input, Number):
+                    scalars.append(input)
+                elif isinstance(input, np.ndarray):
+                    assert input.shape == self.data.shape, 'Inconsistent array shapes.'
+                    scalars.append(input)
+                elif isinstance(input, self.__class__):
+                    assert self.hdr == input.hdr, 'Inconsistent RasterInfo.'
+                    scalars.append(input.data)
+                else:
+                    return NotImplemented
+            return self.__class__(data=ufunc(*scalars, **kwargs), hdr=self.hdr)
+        else:
+            return NotImplemented
 
-    def __truediv__(self, other):
+    def __array_function__(self, func, types, args, kwargs):
         """
-        Floating point division between two rasters.
-        """
-        # Check RasterInfo consistency
-        assert self.hdr == other.hdr, 'RasterInfo objects not equal.'
-        # Perform division and return a new Raster
-        data = self.data / other.data
-        return Raster(data=data, hdr=self.hdr)
+        Implements __array__function__ for Raster objects following:
+        https://numpy.org/doc/stable/user/basics.dispatch.html#basics-dispatch
 
-    def __pow__(self, exponent):
+        This allows for calling various numpy reduction functions on Raster
+        data. Currently handled functions are in ice.HANDLED_NP_FUNCTIONS.
         """
-        Raise Raster data to a power.
-        """
-        # Raise to power and return a new Raster
-        data = self.data**exponent
-        return Raster(data=data, hdr=self.hdr)
+        # Only allow implemented functions
+        if func not in HANDLED_NP_FUNCTIONS:
+            return NotImplemented
 
-    def sqrt(self):
-        """
-        Return square root of data. Used for NumPy compatibility.
-        """
-        return np.sqrt(self.data)
+        # Note: this allows subclasses that don't override
+        # __array_function__ to handle Raster objects.
+        if not all(issubclass(t, self.__class__) for t in types):
+            return NotImplemented
+
+        return HANDLED_NP_FUNCTIONS[func](*args, **kwargs)
+
+
+def implements(np_function):
+   """
+   Register an __array_function__ implementation for Raster objects.
+   """
+   def decorator(func):
+       HANDLED_NP_FUNCTIONS[np_function] = func
+       return func
+   return decorator
+
+@implements(np.sum)
+def sum(r, **kwargs):
+    """
+    Implementation of np.sum for Raster objects.
+    """
+    return np.sum(r.data, **kwargs)
+
+@implements(np.mean)
+def mean(r, **kwargs):
+    """
+    Implementation of np.mean for Raster objects.
+    """
+    return np.mean(r.data, **kwargs)
+
+@implements(np.std)
+def std(r, **kwargs):
+    """
+    Implementation of np.std for Raster objects.
+    """
+    return np.std(r.data, **kwargs)
+
+@implements(np.median)
+def median(r, **kwargs):
+    """
+    Implementation of np.median for Raster objects.
+    """
+    return np.median(r.data, **kwargs)
+
+@implements(np.nansum)
+def nansum(r, **kwargs):
+    """
+    Implementation of np.nansum for Raster objects.
+    """
+    return np.nansum(r.data, **kwargs)
+
+@implements(np.nanmean)
+def nanmean(r, **kwargs):
+    """
+    Implementation of np.nanmean for Raster objects.
+    """
+    return np.nanmean(r.data, **kwargs)
+
+@implements(np.nanstd)
+def nanstd(r, **kwargs):
+    """
+    Implementation of np.nanstd for Raster objects.
+    """
+    return np.nanstd(r.data, **kwargs)
+
+@implements(np.nanmedian)
+def nanmedian(r, **kwargs):
+    """
+    Implementation of np.nanmedian for Raster objects.
+    """
+    return np.nanmedian(r.data, **kwargs)
 
 
 class RasterInfo:
