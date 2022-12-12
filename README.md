@@ -70,12 +70,12 @@ pip install pyproj
 In the file `raster.py` are two classes, `Raster` and `RasterInfo`. The former encapsulates basic raster-type data (i.e., 2D imagery) and provides some convenience functions to interface with the GDAL Python API. Therefore, any raster format that is compatible with GDAL can be read in with the `Raster` class, e.g.:
 
 ```python
-raster = ice.Raster('velocity.tif')
+raster = ice.Raster(rasterfile='velocity.tif')
 ```
 Any instance of the `Raster` class will have as an attribute an instance of the `RasterInfo` class. This class is a separate class that encapsulates all relevant metadata associated with the raster: 1) upper left pixel coordinates; 2) pixel spacing; and 3) coordinate projection system. The `RasterInfo` instance and its data can be accessed via the `hdr` class variable, e.g.:
 
 ```python
-raster = ice.Raster('velocity.tif')
+raster = ice.Raster(rasterfile='velocity.tif')
 print(raster.hdr.xstart)  # Upper left X-coordinate
 print(raster.hdr.ystart)  # Upper left Y-coordinate
 print(raster.hdr.dx)      # X-spacing
@@ -87,7 +87,7 @@ print(raster.hdr.dy)      # Y-spacing
 As shown before, one can load raster files by providing the path to the GDAL-compatible file via the keyword argument `rasterfile=` (later, we'll see how to interface with certain HDF5 datasets using a different keyword argument):
 
 ```python
-raster = ice.Raster('velocity.tif')
+raster = ice.Raster(rasterfile='velocity.tif')
 ```
 If you would like to load only a subset of the raster, you may provide a GDAL-compatible projection window (e.g., `projWin`) defined by the standard `[ulx, uly, lrx, lry]`:
 
@@ -101,6 +101,7 @@ raster = ice.Raster('large_mosaic_raster.vrt', projWin=projWin)
 Alternatively, you may provide Python `slice` objects to the `Raster` constructor. These slices correspond to min-max indices of the image in row and column coordinates:
 
 ```python
+
 # Row bounds
 islice = slice(100, 300)
 
@@ -108,7 +109,7 @@ islice = slice(100, 300)
 jslice = slice(400, 800)
 
 # Read a raster subset
-raster = ice.Raster('velocity.tif',
+raster = ice.Raster(rasterfile='velocity.tif',
                     islice=islice,
                     jslice=jslice)
 ```
@@ -134,10 +135,10 @@ Let's say we have a raster covering a geographic area, and we wish to resample t
 
 ```python
 # First raster
-raster = ice.Raster('velocity.tif')
+raster = ice.Raster(rasterfile='velocity.tif')
 
 # Another raster with a different geographic area
-ref_raster = ice.Raster('velocity2.tif')
+ref_raster = ice.Raster(rasterfile='velocity2.tif')
 
 # Resample first raster to area of second
 raster.resample(ref_raster.hdr)
@@ -149,10 +150,10 @@ In some cases, we would like to resample a raster to a geographic area with a _d
 
 ```python
 # Source raster in latitude-longitude (EPSG: 4326)
-src_raster = ice.Raster('velocity_latlon.tif')
+src_raster = ice.Raster(rasterfile='velocity_latlon.tif')
 
 # Another raster in polar stereographic north (EPSG: 3413)
-trg_raster = ice.Raster('velocity_polar.tif')
+trg_raster = ice.Raster(rasterfile='velocity_polar.tif')
 
 # Warp source raster
 ice.warp(src_raster, target_hdr=trg_raster.hdr)
@@ -172,26 +173,18 @@ trg_hdr = ice.RasterInfo(X=X, Y=Y, epsg=3413)
 ice.warp(src_raster, target_hdr=trg_hdr)
 ```
 
-### Converting between projection and image coordinates and raster interpolation
+### Converting between projection and image coordinates
 
 To convert between physical XY-coordinates of the raster (in its projection system) to image coordinates:
 
 ```python
+# XY -> image
+row, col = raster.hdr.xy_to_imagecoord(x, y)
+
 # image -> XY
 x, y = raster.hdr.imagecoord_to_xy(row, col)
-
-# XY -> image (useful for getting raster value nearest grid point)
-row, col = raster.hdr.xy_to_imagecoord(x, y)
-value = raster[row, col]
 ```
-Note that row and column indices for a given XY-coordinate are rounded to the nearest integer. Interpolation of the raster at a list or array of coordinates can be done using:
-
-```python
-# Perform cubic interpolation at a set of coordinates
-x = np.array([100.0, 101.5, 102.3])
-y = np.array([32.1, 32.0, 31.8])
-values = ice.interpolate_raster(raster, x, y, order=3)
-```
+Note that row and column indices for a given XY-coordinate are rounded to the nearest integer.
 
 ### Extracting linear transect from raster
 
@@ -208,33 +201,6 @@ end = (1200.0, 800.0)
 transect = raster.transect(start, end, n=200)
 ```
 Note that the keyword argument `n` specifies the number of equally-spaced points you would like the transect to have.
-
-### Interoperability with NumPy
-
-`Raster` objects are designed to behave like standard NumPy arrays. For example, raster data can be accessed and set as:
-
-```python
-r = ice.Raster('velocity.tif')
-p = r[100, 100]
-p = r[100:150, 100:150]
-r[100:150, 100:150] = np.nan
-```
-NumPy functions that act on an element-by-element basis (i.e., ufuncs) can be applied on `Raster` obects. Additionally, a limited set of reduction functions, like `mean` or `sum` can be applied:
-
-```python
-np.exp(r)
-np.cos(r)
-np.nanmean(r, axis=0)
-np.nanmedian(r)
-```
-Finally, Matplotlib or SciPy functions that apply `np.asarray` on array-like arguments will also work with `Raster` objects. One example is `pyplot.imshow`:
-
-```
-import matplotlib.pyplot as plt
-
-r = ice.Raster('velocity.tif')
-im = plt.imshow(r, extent=r.hdr.extent)
-```
 
 ## Stack analysis
 
