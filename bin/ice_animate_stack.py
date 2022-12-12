@@ -28,8 +28,10 @@ def parse():
         help='Matplotlib colormap to use for displaying raster. Default: GMT_haxby.')
     parser.add_argument('-dpi', '--dpi', action='store', type=int, default=250, 
         help='Image quality for animation. Default: 250.')
-    parser.add_argument('-figsize', '--figsize', action='store', type=int, nargs=2, default=[9, 9],
+    parser.add_argument('-figsize', '--figsize', action='store', type=float, nargs=2, default=[9, 9],
         help='Figure size for animation. Default: (9,9).')
+    parser.add_argument('-aspect', '--aspect', action='store', type=str, default='equal',
+        help='Aspect of figure. Default: equal.')
     parser.add_argument('-fps', '--fps', action='store', type=int, default=5, 
         help='Frames per second for the animation. Default: 5.')
     parser.add_argument('-k', '-key', '--key', action='store', type=str, default='data', 
@@ -83,6 +85,13 @@ def main(args):
 
     im = ax.imshow(data[0] - data_ref, extent=stack.hdr.extent, cmap=cmap, clim=args.clim,
         alpha=args.alpha)
+
+    # Set aspect
+    try:
+        aspect = float(args.aspect)
+    except ValueError:
+        aspect = args.aspect
+    ax.set_aspect(aspect)
 
     # Create title
     datestr = ice.tdec2datestr(stack.tdec[0])
