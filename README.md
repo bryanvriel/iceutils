@@ -57,13 +57,6 @@ import iceutils as ice
 
 t = ice.generateRegularTimeArray(tmin, tmax)
 ```
-### Known installation issues
-1. Out-of-date `pyproj`: for some of the routines in `ice.Raster`, you need to have a version of `pyproj` > 2.0. However, some conda environments will only allow you to install versions 1.9.x. A temporary fix is to uninstall `pyproj` from conda and install it with `pip`, e.g.:
-
-```
-conda uninstall pyproj
-pip install pyproj
-```
 
 ## Raster interface
 
