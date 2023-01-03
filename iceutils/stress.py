@@ -6,7 +6,7 @@ from functools import partial
 from multiprocessing import Pool
 import sys
 
-from .raster import inpaint as _inpaint
+from .raster import Raster, inpaint as _inpaint
 
 def compute_stress_strain(vx, vy, dx=100, dy=-100, grad_method='numpy', inpaint=True, rotate=False,
                           h=None, b=None, AGlen=None, rho_ice=917.0, g=9.80665,
@@ -196,8 +196,8 @@ def gradient(z, spacing=1.0, axis=None, remask=True, method='numpy',
 
     Parameters
     ----------
-    z: array_like
-        2-dimensional array containing samples of a scalar function.
+    z: Raster or array_like
+        2-dimensional raster or array containing samples of a scalar function.
     spacing: float or tuple of floats, optional
         Spacing between f values along specified axes. If tuple provided, spacing corresponds
         to axes directions specified by axis. Default: 1.0.
@@ -220,6 +220,11 @@ def gradient(z, spacing=1.0, axis=None, remask=True, method='numpy',
         Set of ndarrays (or single ndarry for only one axis) with same shape as z
         corresponding to the derivatives of z with respect to each axis.
     """
+    # Check if a raster has been passed
+    if isinstance(z, Raster):
+        spacing = z.hdr.spacing
+        z = z.data.copy()
+
     # Mask mask of NaNs
     nan_mask = np.isnan(z)
     have_nan = np.any(nan_mask)
