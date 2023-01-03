@@ -505,6 +505,13 @@ def implements(np_function):
        return func
    return decorator
 
+@implements(np.any)
+def any(r, **kwargs):
+    """
+    Implementation of np.any for Raster objects.
+    """
+    return np.any(r.data, **kwargs)
+
 @implements(np.sum)
 def sum(r, **kwargs):
     """
