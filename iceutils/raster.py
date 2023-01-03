@@ -1463,7 +1463,8 @@ def write_array_as_raster(array, hdr, filename, epsg=None, projstr=None,
     # Write
     raster.write_gdal(filename, epsg=epsg, projstr=projstr, dtype=dtype, driver=driver)
 
-def griddata(x, y, z, dx, dy, x_extent=None, y_extent=None, method='linear', epsg=None):
+def griddata(x, y, z, hdr=None, dx=100, dy=100, x_extent=None, y_extent=None,
+             method='linear', epsg=None):
     """
     Utility function to create a 2D array for scattered data. Calls griddata from
     scipy.interpolate.
@@ -1476,10 +1477,12 @@ def griddata(x, y, z, dx, dy, x_extent=None, y_extent=None, method='linear', eps
         Array of y-coordinates.
     z: ndarray
         Array of data values.
-    dx: float
-        Spacing of output grid in x-direction.
-    dy: float
-        Spacing of output grid in y-direction.
+    hdr: RasterInfo
+        Output RasterInfo for specifying grid geometry.
+    dx: float, optional
+        Spacing of output grid in x-direction. Used if no hdr supplied.
+    dy: float, optional
+        Spacing of output grid in y-direction. Used if no hdr supplied.
     x_extent: list, optional
         [x_min, x_max] bounds of output grid. Default computed from data.
     y_extent: list, optional
@@ -1497,29 +1500,34 @@ def griddata(x, y, z, dx, dy, x_extent=None, y_extent=None, method='linear', eps
     from scipy.interpolate import griddata
 
     # Define the output grid
-    if x_extent is None:
-        x_min, x_max = np.min(x), np.max(x)
-    else:
-        x_min, x_max = x_extent
+    if hdr is not None:
+        Xg, Yg = hdr.meshgrid()
+        out_hdr = hdr
 
-    if y_extent is None:
-        y_min, y_max = np.min(y), np.max(y)
     else:
-        y_min, y_max = y_extent
+        if x_extent is None:
+            x_min, x_max = np.min(x), np.max(x)
+        else:
+            x_min, x_max = x_extent
 
-    Nx = int((x_max - x_min) / dx) + 1
-    Ny = int((y_max - y_min) / abs(dy)) + 1
-    xg = x_min + dx * np.arange(Nx)
-    yg = y_max + dy * np.arange(Ny)
-    Xg, Yg = np.meshgrid(xg, yg)
+        if y_extent is None:
+            y_min, y_max = np.min(y), np.max(y)
+        else:
+            y_min, y_max = y_extent
+
+        Nx = int((x_max - x_min) / dx) + 1
+        Ny = int((y_max - y_min) / abs(dy)) + 1
+        xg = x_min + dx * np.arange(Nx)
+        yg = y_max + dy * np.arange(Ny)
+        Xg, Yg = np.meshgrid(xg, yg)
+        out_hdr = RasterInfo(X=Xg, Y=Yg, epsg=epsg)
 
     # Call griddata
     pts = np.column_stack((x, y))
     Zg = griddata(pts, z, (Xg, Yg), method=method)
     
     # Wrap in raster
-    hdr = RasterInfo(X=Xg, Y=Yg, epsg=epsg)
-    raster = Raster(data=Zg, hdr=hdr)
+    raster = Raster(data=Zg, hdr=out_hdr)
 
     return raster
 
