@@ -95,7 +95,7 @@ def interpretAsDatetime(invalue):
     '''
 
     if isinstance(invalue, str):
-        outvalue = fromGiantDatetime(tmin)
+        outvalue = fromGiantDatetime(invalue)
     elif isinstance(invalue, datetime.datetime):
         outvalue = invalue
     elif isinstance(invalue, datetime.date):
