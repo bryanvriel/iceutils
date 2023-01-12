@@ -23,6 +23,8 @@ def parse():
         help='Matplotlib cmap to use for displaying raster. Default: turbo.')
     parser.add_argument('-clim', action='store', type=float, nargs=2, default=[None, None],
         help='Color limits for display.')
+    parser.add_argument('-xscale', action='store', type=float, default=1.0,
+        help='Scale factor for raster coordinates. Default: 1.0.')
     parser.add_argument('-save', action='store', type=str, default=None,
         help='Save mean image to raster. Default: None.')
     parser.add_argument('-save_epsg', action='store', type=int, default=None,
@@ -59,7 +61,7 @@ def main(args):
         ref = ax.imshow(db, aspect='auto', cmap='gray', vmin=low, vmax=high,
                         extent=stack.hdr.extent)
     im = ax.imshow(mean, aspect='auto', vmin=vmin, vmax=vmax, cmap=cmap,
-                   extent=stack.hdr.extent, alpha=args.alpha)
+                   extent=args.xscale*stack.hdr.extent, alpha=args.alpha)
     cbar = plt.colorbar(im, ax=ax, pad=0.02)
     cbar.set_label(args.key)
 
