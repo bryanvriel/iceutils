@@ -269,7 +269,7 @@ def transform_coordinates(x_in, y_in, epsg_in=None, epsg_out=None, crs_in=None, 
 
     return x_out, y_out
 
-def transform_projwin(projWin, epsg_in=None, epsg_out=None, proj_in=None, proj_out=None):
+def transform_projwin(projWin, epsg_in=None, epsg_out=None, crs_in=None, crs_out=None):
     """
     Transforms projection window from one projection to another specified by EPSG codes
     or pyproj.Proj objects. The output projection window is guaranteed to have
@@ -283,10 +283,10 @@ def transform_projwin(projWin, epsg_in=None, epsg_out=None, proj_in=None, proj_o
         Input EPSG projection.
     epsg_out: int, optional
         Output EPSG projection.
-    proj_in: pyproj.Proj, optional
-        Input Proj object.
-    proj_out: pyproj.Proj, optional
-        Output Proj object.
+    crs_in: pyproj.crs.CRS, optional
+        Input Projection of input coordinates.
+    crs_out: pyproj.crs.CRS, optional
+        Output Projection of output coordinates.
 
     Returns
     -------
@@ -301,7 +301,7 @@ def transform_projwin(projWin, epsg_in=None, epsg_out=None, proj_in=None, proj_o
     for lon, lat in ((lon_min, lat_max), (lon_max, lat_max),
                      (lon_max, lat_min), (lon_min, lat_min)):
         xval, yval = transform_coordinates(
-            lon, lat, epsg_in=epsg_in, epsg_out=epsg_out, proj_in=proj_in, proj_out=proj_out
+            lon, lat, epsg_in=epsg_in, epsg_out=epsg_out, crs_in=crs_in, crs_out=crs_out
         )
         x.append(xval)
         y.append(yval)
