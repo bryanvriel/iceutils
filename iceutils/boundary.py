@@ -216,9 +216,7 @@ def load_kml(kmlfile, out_epsg=4326):
 
     # Perform transformation if another EPSG is specified
     if out_epsg != 4326:
-        proj = pyproj.Proj('EPSG:%d' % out_epsg)
-        wgs84 = pyproj.Proj('EPSG:4326')
-        x, y = pyproj.transform(wgs84, proj, lon, lat, always_xy=True)
+        x, y = transform_coordinates(lon, lat, epsg_in=4326, epsg_out=out_epsg)
         return x, y
     else:
         return lon, lat
