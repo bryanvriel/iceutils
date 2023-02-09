@@ -223,7 +223,7 @@ def load_kml(kmlfile, out_epsg=4326):
     else:
         return lon, lat
 
-def transform_coordinates(x_in, y_in, epsg_in=None, epsg_out=None, proj_in=None, proj_out=None):
+def transform_coordinates(x_in, y_in, epsg_in=None, epsg_out=None, crs_in=None, crs_out=None):
     """
     Transforms coordinates from one projection to another specified by EPSG codes.
 
@@ -237,10 +237,10 @@ def transform_coordinates(x_in, y_in, epsg_in=None, epsg_out=None, proj_in=None,
         Input EPSG projection.
     epsg_out: int, optional
         Output EPSG projection.
-    proj_in: pyproj.Proj, optional
-        Input Proj object.
-    proj_out: pyproj.Proj, optional
-        Output Proj object.
+    crs_in: pyproj.crs.CRS, optional
+        Input Projection of input coordinates.
+    crs_out: pyproj.crs.CRS, optional
+        Output Projection of output coordinates.
 
     Returns
     -------
@@ -250,17 +250,24 @@ def transform_coordinates(x_in, y_in, epsg_in=None, epsg_out=None, proj_in=None,
         Output Y-coordinates.
     """
     # Create projection objects
-    if proj_in is None or proj_out is None:
+    if crs_in is None or crs_out is None:
         assert epsg_in is not None and epsg_out is not None, 'Must specify EPSG codes.'
-        proj_in = pyproj.Proj('EPSG:%d' % epsg_in)
-        proj_out = pyproj.Proj('EPSG:%d' % epsg_out)
+        crs_in = pyproj.crs.CRS.from_epsg(epsg_in)
+        crs_out = pyproj.crs.CRS.from_epsg(epsg_out)
 
     # If projections are the same, simply return the inputs
-    if proj_in == proj_out:
+    if crs_in == crs_out:
         return x_in, y_in
 
-    # Perform transformation
-    return pyproj.transform(proj_in, proj_out, x_in, y_in, always_xy=True)
+    # Transform; note, if projection is 4326, switch order of coordinates
+    transformer = pyproj.Transformer.from_crs(crs_in, crs_out)
+    if crs_in.to_epsg() == 4326:
+        x_in, y_in = y_in, x_in
+    x_out, y_out = transformer.transform(x_in, y_in)
+    if crs_out.to_epsg() == 4326:
+        x_out, y_out = y_out, x_out
+
+    return x_out, y_out
 
 def transform_projwin(projWin, epsg_in=None, epsg_out=None, proj_in=None, proj_out=None):
     """
