@@ -1236,20 +1236,20 @@ def warp(raster, target_epsg=None, target_srs=None, source_srs=None,
     # Check source RasterInfo has EPSG value set or source_srs is provided
     if raster.hdr.epsg is None:
         assert source_srs is not None, 'Must provide source_srs since no EPSG found for input.'
-        src_proj = pyproj.Proj(source_srs)
+        src_proj = pyproj.CRS.from_string(source_srs)
     else:
-        src_proj = pyproj.Proj('EPSG:%d' % raster.hdr.epsg)
+        src_proj = pyproj.CRS.from_epsg(raster.hdr.epsg)
 
     # Create target projection
     if target_epsg is None:
         if target_hdr is not None and target_hdr.epsg is not None:
-            trg_proj = pyproj.Proj('EPSG:%d' % target_hdr.epsg)
+            trg_proj = pyproj.CRS.from_epsg(target_hdr.epsg)
         elif target_srs is not None:
-            trg_proj = pyproj.Proj(target_srs)
+            trg_proj = pyproj.CRS.from_string(target_srs)
         else:
             raise ValueError('Must provide RasterInfo or target_srs.')
     elif target_epsg is not None:
-        trg_proj = pyproj.Proj('EPSG:%d' % target_epsg)
+        trg_proj = pyproj.CRS.from_epsg(target_epsg)
 
     # If only EPSG code is provided, compute target grid
     if target_hdr is None:
@@ -1257,10 +1257,10 @@ def warp(raster, target_epsg=None, target_srs=None, source_srs=None,
         # Convert bounding coordinates from source to target projection
         src_xmin, src_xmax = raster.hdr.xlim
         src_ymin, src_ymax = raster.hdr.ylim
-        x0, y0 = pyproj.transform(src_proj, trg_proj, src_xmin, src_ymax, always_xy=True)
-        x1, y1 = pyproj.transform(src_proj, trg_proj, src_xmax, src_ymax, always_xy=True)
-        x2, y2 = pyproj.transform(src_proj, trg_proj, src_xmax, src_ymin, always_xy=True)
-        x3, y3 = pyproj.transform(src_proj, trg_proj, src_xmin, src_ymin, always_xy=True)
+        x0, y0 = transform_coordinates(src_xmin, src_ymax, crs_in=src_proj, crs_out=trg_proj)
+        x1, y1 = transform_coordinates(src_xmax, src_ymax, crs_in=src_proj, crs_out=trg_proj)
+        x2, y2 = transform_coordinates(src_xmax, src_ymin, crs_in=src_proj, crs_out=trg_proj)
+        x3, y3 = transform_coordinates(src_xmin, src_ymin, crs_in=src_proj, crs_out=trg_proj)
         xvals = np.array([x0, x1, x2, x3])
         yvals = np.array([y0, y1, y2, y3])
         trg_xmin, trg_xmax = np.min(xvals), np.max(xvals)
@@ -1304,10 +1304,11 @@ def warp(raster, target_epsg=None, target_srs=None, source_srs=None,
 
                 # Convert target coordinates to source coordinates
                 islice, jslice = chunks[k]
-                src_x, src_y = pyproj.transform(trg_proj, src_proj,
-                                                trg_x[islice, jslice],
-                                                trg_y[islice, jslice],
-                                                always_xy=True)
+                src_x, src_y = transform_coordinates(
+                    trg_x[islice, jslice],
+                    trg_y[islice, jslice],
+                    crs_in=trg_proj, crs_out=src_proj
+                )
 
                 # Interpolate source raster
                 data_warped[islice, jslice] = interpolate_raster(raster, src_x, src_y,
@@ -1319,10 +1320,11 @@ def warp(raster, target_epsg=None, target_srs=None, source_srs=None,
         for k in range(n_chunks):
             # Convert target coordinates to source coordinates
             islice, jslice = chunks[k]
-            src_x, src_y = pyproj.transform(trg_proj, src_proj,
-                                            trg_x[islice, jslice],
-                                            trg_y[islice, jslice],
-                                            always_xy=True)
+            src_x, src_y = transform_coordinates(
+                trg_x[islice, jslice],
+                trg_y[islice, jslice],
+                crs_in=trg_proj, crs_out=src_proj
+            )
 
             # Interpolate source raster
             data_warped[islice, jslice] = interpolate_raster(raster, src_x, src_y,
