@@ -21,6 +21,8 @@ def parse():
         help='Color limits for display.')
     parser.add_argument('-xscale', action='store', type=float, default=1.0,
         help='Scale factor for raster coordinates. Default: 1.0.')
+    parser.add_argument('-i', action='store', type=str, default=None, dest='interpolation',
+                        help='Interpolation method for pyplot.imshow.')
     return parser.parse_args()
 
 def main(args):
@@ -32,7 +34,7 @@ def main(args):
     vmin, vmax = args.clim
     cmap = ice.get_cmap(args.cmap)
     im = ax.imshow(r.data, aspect='auto', vmin=vmin, vmax=vmax, cmap=cmap,
-                   extent=args.xscale*r.hdr.extent)
+                   extent=args.xscale*r.hdr.extent, interpolation=args.interpolation)
     cbar = plt.colorbar(im, ax=ax, pad=0.02)
 
     plt.tight_layout()
