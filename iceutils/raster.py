@@ -495,6 +495,19 @@ class Raster(numpy.lib.mixins.NDArrayOperatorsMixin):
 
         return HANDLED_NP_FUNCTIONS[func](*args, **kwargs)
 
+    @property
+    def size(self):
+        return self.data.size
+    @size.setter
+    def size(self, value):
+        raise ValueError('Cannot set size explicitly')
+
+    def ravel(self):
+        return self.data.ravel()
+
+    def flatten(self):
+        return self.data.flatten()
+
 
 def implements(np_function):
    """
