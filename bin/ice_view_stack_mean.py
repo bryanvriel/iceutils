@@ -34,7 +34,7 @@ def parse():
 def main(args):
 
     # Load the stack
-    stack = ice.Stack(args.stackfile)
+    stack = ice.Stack(args.stackfile, ds_hdr=args.key)
 
     # Check if requested dataset is 2D. If so, view it directly
     if stack[args.key].ndim == 2:
