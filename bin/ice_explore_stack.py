@@ -49,7 +49,7 @@ def parse():
 def main(args):
 
     # Load the stack
-    stack = ice.Stack(args.stackfile)
+    stack = ice.Stack(args.stackfile, ds_hdr=args.key)
 
     # Get frame
     if args.frame == 'initial':
@@ -85,12 +85,18 @@ def main(args):
     # If model directory is given, load model stack (full fit)
     mstack = None
     if args.mfile is not None:
-        mstack = ice.Stack(args.mfile)
+        mstack = ice.Stack(args.mfile, ds_hdr=args.mkey)
         # Load correct time array
         if args.mtdec != 'tdec':
             mtdec = mstack[args.mtdec][()]
         else:
             mtdec = mstack.tdec
+            if mstack.fmt == 'NHW':
+                M_Nt = mstack[args.mkey].shape[0]
+            else:
+                M_Nt = mstack[args.mkey].shape[2]
+            if M_Nt != mtdec.size:
+                mtdec = np.arange(M_Nt)
 
     # Load reference SAR image
     if args.ref is not None:
