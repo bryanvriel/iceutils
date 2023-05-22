@@ -16,7 +16,7 @@ class Stack:
 
     def __init__(self, filename, mode='r', fmt='NHW',
                  init_stack=None, init_tdec=None, init_rasterinfo=None,
-                 init_data=False):
+                 init_data=False, ds_hdr=None):
 
         self.fid = None
         self._datasets = {}
@@ -30,7 +30,8 @@ class Stack:
 
         # If file opened in read mode, save RasterInfo and time information
         if self.mode in ('r', 'r+'):
-            self.hdr = RasterInfo(stackfile=filename)
+
+            self.hdr = RasterInfo(stackfile=filename, ds=ds_hdr)
 
             # Read time array
             try:
