@@ -581,6 +581,19 @@ def nanmedian(r, **kwargs):
     """
     return np.nanmedian(r.data, **kwargs)
 
+@implements(np.isfinite)
+def isfinite(r, **kwargs):
+    """
+    Implementation of np.isfinite for Raster objects.
+    """
+    return np.isfinite(r.data, **kwargs)
+
+@implements(np.flatnonzero)
+def flatnonzero(r, **kwargs):
+    """
+    Implementation of np.flatnonzero for Raster objects.
+    """
+    return np.flatnonzero(r.data, **kwargs)
 
 class RasterInfo:
     """
@@ -609,7 +622,7 @@ class RasterInfo:
     """
 
     def __init__(self, rasterfile=None, stackfile=None, X=None, Y=None,
-                 band=1, epsg=None, match=True, islice=None, jslice=None):
+                 band=1, epsg=None, match=True, islice=None, jslice=None, **kwargs):
         """
         Initialize attributes.
         """
@@ -617,7 +630,7 @@ class RasterInfo:
             self.load_gdal_info(rasterfile, islice=islice, jslice=jslice, band=band, match=match)
             self.rasterfile = rasterfile
         elif stackfile is not None:
-            self.load_stack_info(stackfile, islice=islice, jslice=jslice)
+            self.load_stack_info(stackfile, islice=islice, jslice=jslice, **kwargs)
         elif X is not None and Y is not None:
             self.set_from_meshgrid(X, Y, epsg=epsg)
         else:
@@ -683,7 +696,7 @@ class RasterInfo:
         # Close dataset
         dset = None
 
-    def load_stack_info(self, stackfile, islice=None, jslice=None):
+    def load_stack_info(self, stackfile, ds=None, islice=None, jslice=None):
         """
         Read header information from stack file.
 
@@ -691,6 +704,8 @@ class RasterInfo:
         ----------
         stackfile: str
             HDF5 file for Stack to read raster data from.
+        ds: str
+            Name of dataset to read dimensions from.
         islice: slice, optional
             Slice object specifying image rows to subset.
         jslice: slice, optional
@@ -707,8 +722,13 @@ class RasterInfo:
                 X = fid['x'][()].squeeze()
                 Y = fid['y'][()].squeeze()
             except KeyError:
-                X = fid['X'][()]
-                Y = fid['Y'][()]
+                try:
+                    X = fid['X'][()]
+                    Y = fid['Y'][()]
+                except KeyError:
+                    Ny, Nx = fid[ds].shape[-2:]
+                    X = np.arange(Nx)
+                    Y = np.arange(Ny)
 
             # Extract 1D
             if X.ndim == 2:
