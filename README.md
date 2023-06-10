@@ -1,5 +1,7 @@
 # iceutils
 
+[![LICENSE](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE.md)
+
 `iceutils` is a collection of Python classes and functions for interfacing with geospatial rasters. Support includes common operations on rasters, such as warping, cropping, masking, gradient computaton, basic arithmetic, etc. The motivation for `iceutils` is the simplification of I/O of rasters and associated metadata while streamlining the interface between raster data and various NumPy, SciPy, and Matplotlib functions. In short, by treating rasters as metadata-decorated NumPy arrays, we can easily assimilate rasters of different projections into our analysis and visualization code using familiar interfaces.
 
 Time-dependent rasters can be stored in a stack object in order to perform time series analysis and visualization of raster changes. Time series methods are based on the regularized least squares approaches outlined in "Riel, B., Minchew, B., & Joughin, I. (2021). Observing traveling waves in glaciers with remote sensing: new flexible time series methods and application to Sermeq Kujalleq (Jakobshavn Isbræ), Greenland. _The Cryosphere_."
@@ -271,3 +273,7 @@ v = stack.slice(index)
 See the IPython notebook `doc/time_series_inversion.ipynb` for a full example.
 
 ## Miscellaneous Utilities
+
+## License
+
+iceutils is MIT licensed, as found in the [LICENSE file](LICENSE.md)
