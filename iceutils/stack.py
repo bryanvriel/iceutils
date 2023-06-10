@@ -1,10 +1,10 @@
 #-*- coding: utf-8 -*-
 
+from typing import List, Union
 import warnings
 import numpy as np
 import copy
 import h5py
-import sys
 
 from .raster import Raster, RasterInfo
 from .timeutils import datestr2tdec
@@ -16,13 +16,38 @@ class Stack:
 
     def __init__(self, filename, mode='r', fmt='NHW',
                  init_stack=None, init_tdec=None, init_rasterinfo=None,
-                 init_data=False, ds_hdr=None):
+                 init_names=None, init_data=False, ds_hdr=None):
+        """Reads Stack from an existing HDF5 file or creates a new Stack.
 
+        To create a new Stack, set mode to 'x' and specify:
+        - init_stack
+        - init_rasterinfo + init_tdec + (optionally) init_names
+
+        Parameters
+        ----------
+        filename: str
+            Path to the HDF5 file to read from/write to.
+        mode: 'r', 'r+', 'w', 'a', 'x'
+            Mode to open the file in. Must be 'x' to create a new Stack if it
+            does not exist, or 'w' to overwrite an existing Stack file.
+        init_stack: ice.Stack, optional
+            Reference Stack to initialize RasterInfo and tdec from.
+        init_tdec: np.ndarray, optional
+            Array of decimal years to initialize Stack with. Must be provided
+            if creating a new Stack and `init_stack` is not provided.
+        init_rasterinfo: optional ice.RasterInfo
+            RasterInfo to initialize Stack with. Must be provided if creating a
+            new Stack and `init_stack` is not provided.
+        init_names: np.ndarray or List of strings, optional
+            List of names corresponding to each Raster in a Stack.
+        init_data: bool
+            Whether to create a default empty dataset.
+        """
         self.fid = None
         self._datasets = {}
 
         # Store the mode
-        assert mode in ('r', 'r+', 'w', 'a'), 'Unsupported HDF5 file open mode'
+        assert mode in ('r', 'r+', 'w', 'a', 'x'), 'Unsupported HDF5 file open mode'
         self.mode = mode
 
         # Open HDF5 file 
@@ -65,6 +90,8 @@ class Stack:
             if isinstance(init_stack, Stack):
                 self.hdr = init_stack.hdr
                 self.tdec = init_stack.tdec
+                if 'names' in init_stack._datasets.keys():
+                    self.names = init_stack.names
 
             # Otherwise, set from time array and RasterInfo
             elif init_tdec is not None and init_rasterinfo is not None:
@@ -75,6 +102,8 @@ class Stack:
                 raise ValueError('Must supply init_stack or init_tdec+init_rasterinfo.')
 
             # Set metadata datasets and attributes
+            if init_names is not None:
+                self.names = init_names
             self.fid['x'] = self.hdr.xcoords
             self.fid['y'] = self.hdr.ycoords
             self.fid['tdec'] = self.tdec
@@ -165,6 +194,35 @@ class Stack:
             self._datasets[key][index, :, :] = data
         elif self.fmt == 'HWN':
             self._datasets[key][:, :, index] = data
+
+    @property
+    def names(self):
+        """
+        Get the names of the rasters in the Stack.
+        """
+        ascii_names = self.fid['names']
+        names = [n[0].decode('utf-8') for n in ascii_names]
+        return np.array(names)
+
+    @names.setter
+    def names(self, names: Union[np.ndarray, List[str]]):
+        """
+        Set the name of each Raster in a Stack for reference.
+
+        Args:
+            names: List or np.ndarray of names for each raster in Stack.
+        """
+        ascii_names = [n.encode('ascii', 'ignore') for n in names]
+
+        # hdf5 requires you to specify the length of the strings being saved,
+        # use the longest name as reference so that no name is clipped.
+        max_str_len = len(max(names, key=len))
+        self.fid.create_dataset(
+            'names',
+            (len(ascii_names), 1),
+            f'S{max_str_len}',
+            ascii_names
+        )
 
     def get_chunk(self, slice_y, slice_x, key='data'):
         """
