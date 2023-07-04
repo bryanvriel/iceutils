@@ -22,7 +22,7 @@ def parse():
 def main(args):
 
     # Get rasterinfo
-    if args.rasterfile.endswith('.h5'):
+    if args.rasterfile.endswith('.h5') or args.rasterfile.endswith('.nc'):
         stack = ice.Stack(args.rasterfile)
         hdr = stack.hdr
         tdec = stack.tdec

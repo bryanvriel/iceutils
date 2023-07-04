@@ -119,7 +119,7 @@ class Raster(numpy.lib.mixins.NDArrayOperatorsMixin):
         # Attempt to guess format of generic filename if provided
         if len(args) > 0:
             filename = args[0]
-            if filename.endswith('.h5'):
+            if filename.endswith('.h5') or filename.endswith('.nc'):
                 stackfile = filename
             else:
                 rasterfile = filename
