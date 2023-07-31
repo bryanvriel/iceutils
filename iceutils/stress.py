@@ -94,6 +94,7 @@ def compute_stress_strain(vx, vy, dx=100, dy=-100, grad_method='numpy', inpaint=
     # Normal strain rates
     exx = D11.reshape(Ny, Nx)
     eyy = D22.reshape(Ny, Nx)
+    exy = D12.reshape(Ny, Nx)
 
     # Shear- same result as: e_xy_max = np.sqrt(0.25 * (e_x - e_y)**2 + e_xy**2)
     trace = D11 + D22
@@ -107,7 +108,8 @@ def compute_stress_strain(vx, vy, dx=100, dy=-100, grad_method='numpy', inpaint=
     # Store strain components in dictionary
     strain_dict = {'e_xx': exx,
                    'e_yy': eyy,
-                   'e_xy': shear,
+                   'e_xy': exy,
+                   'shear_magnitude': shear,
                    'dilatation': dilatation,
                    'effective': effective_strain}
 
