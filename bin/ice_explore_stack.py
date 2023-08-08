@@ -25,6 +25,8 @@ def parse():
         help='Model stack file. Default: None.')
     parser.add_argument('-mkey', action='store', type=str, default='data',
         help='Model dataset view. Default: data.')
+    parser.add_argument('-mstyle', action='store', type=str, default='o',
+        help='Model dataset plot style. Default: o.')
     parser.add_argument('-mtdec', action='store', type=str, default='tdec',
         help='Model time vector. Default: tdec.')
     parser.add_argument('-ref', action='store', type=str, default=None,
@@ -152,7 +154,7 @@ def main(args):
 
         if mstack is not None:
             fit = mstack.timeseries(xy=(x, y), key=args.mkey)
-            axts.plot(mtdec, fit, 'o', label='model ' + args.mkey)
+            axts.plot(mtdec, fit, args.mstyle, label='model ' + args.mkey)
 
         axts.set_xlabel(tlabel)
         axts.set_ylabel(args.key)
