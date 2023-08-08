@@ -46,7 +46,7 @@ def main(args):
     if args.output is not None:
         filename = args.output
     else:
-        froot, ext = args.rasterfile.split('.')
+        ext = args.rasterfile.split('.')[-1]
         filename = args.rasterfile.replace(ext, 'kmz')
 
     # Perform warping if necessary
