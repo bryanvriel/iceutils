@@ -87,7 +87,10 @@ def datestr2tdec(yy=0, mm=0, dd=0, hour=0, minute=0, sec=0, microsec=0, dateobj=
         elif type(dateobj) == np.datetime64:
             yy = dateobj.astype('datetime64[Y]').astype(int) + 1970
             mm = dateobj.astype('datetime64[M]').astype(int) % 12 + 1
-            dd = (dateobj - dateobj.astype('datetime64[M]')).astype(int) + 1
+            days = (
+                (dateobj - dateobj.astype('datetime64[M]')) / np.timedelta64(1, 'D')
+            )
+            dd = int(days) + 1
             hour, minute, sec = [0, 0, 0]
         else:
             raise NotImplementedError('dateobj must be str, datetime, or np.datetime64.')
