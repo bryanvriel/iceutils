@@ -20,6 +20,8 @@ def parse():
                         help='Force source EPSG code.')
     parser.add_argument('-driver', action='store', type=str, default='ENVI',
                         help='GDAL driver. Default: ENVI.')
+    parser.add_argument('-dtype', action='store', type=str, default=None,
+                        help='Force the output data type.')
     parser.add_argument('-b', action='store', type=int, default=1, dest='band',
                         help='Raster band to resample. Default: 1.')
     parser.add_argument('-order', action='store', type=int, default=3,
@@ -58,6 +60,11 @@ def main(args):
         else:
             in_epsg = inobj.hdr.epsg
         print(inobj.hdr.projWin)
+
+        # Check the datatypes
+        if args.dtype is not None:
+            if inobj.data.dtype != np.dtype(args.dtype):
+                inobj.data = inobj.data.astype(args.dtype)
 
         # Reference raster
         ref_hdr = ice.RasterInfo(args.reference)
