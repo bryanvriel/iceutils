@@ -8,9 +8,23 @@ import sys
 
 from .raster import Raster, inpaint as _inpaint
 
-def compute_stress_strain(vx, vy, dx=100, dy=-100, grad_method='numpy', inpaint=True, rotate=False,
-                          h=None, b=None, AGlen=None, rho_ice=917.0, g=9.80665,
-                          n=3, **kwargs):
+def compute_stress_strain(
+    vx,
+    vy,
+    dx=100,
+    dy=-100,
+    grad_method='numpy',
+    inpaint=True,
+    rotate=False,
+    h=None,
+    b=None,
+    AGlen=None,
+    rho_ice=917.0,
+    g=9.80665,
+    n=3,
+    eps_min=1.0e-5,
+    **kwargs
+):
     """
     Compute stress and strain fields and return in dictionaries.
 
@@ -43,6 +57,8 @@ def compute_stress_strain(vx, vy, dx=100, dy=-100, grad_method='numpy', inpaint=
         Gravitational constant. Default: 9.80665
     n: int, optional
         Glen's flow law exponent. Default: 3.
+    eps_min: float, optional
+        Minimum effective strain rate value for numerical stability. Default: 1e-5.
     **kwargs:
         Extra keyword arguments to pass to gradient computation. 
 
@@ -62,8 +78,12 @@ def compute_stress_strain(vx, vy, dx=100, dy=-100, grad_method='numpy', inpaint=
     Ny, Nx = vx.shape
 
     # Compute velocity gradients
-    L12, L11 = gradient(vx, spacing=(dy, dx), method=grad_method, inpaint=inpaint, **kwargs)
-    L22, L21 = gradient(vy, spacing=(dy, dx), method=grad_method, inpaint=inpaint, **kwargs)
+    L12, L11 = gradient(
+        vx, spacing=(dy, dx), method=grad_method, inpaint=inpaint, **kwargs
+    )
+    L22, L21 = gradient(
+        vy, spacing=(dy, dx), method=grad_method, inpaint=inpaint, **kwargs
+    )
 
     # Compute components of strain-rate tensor
     D = np.empty((2, 2, vx.size))
@@ -96,14 +116,23 @@ def compute_stress_strain(vx, vy, dx=100, dy=-100, grad_method='numpy', inpaint=
     eyy = D22.reshape(Ny, Nx)
     exy = D12.reshape(Ny, Nx)
 
-    # Shear- same result as: e_xy_max = np.sqrt(0.25 * (e_x - e_y)**2 + e_xy**2)
+    # Shear- same result as
+    # -> e_xy_max = |e_max - e_min|
+    # -> e_xy_max = 2 * np.sqrt(0.25 * (e_x - e_y)**2 + e_xy**2)
     trace = D11 + D22
     det = D11 * D22 - D12 * D21
     shear = np.sqrt(0.25 * trace**2 - det).reshape(Ny, Nx)
 
     # Compute scalar quantities from stress tensors
     dilatation = (L11 + L22).reshape(Ny, Nx)
-    effective_strain = np.sqrt(L11**2 + L22**2 + 0.25 * (L12 + L21)**2 + L11 * L22).reshape(Ny, Nx)
+    effective_strain = np.sqrt(
+        L11**2 + L22**2 + 0.25 * (L12 + L21)**2 + L11 * L22 + eps_min**2
+    ).reshape(Ny, Nx)
+    
+    # Principal strain rates. Equivalent to
+    # e_max/min = 0.5 * (e_x + e_y) +/- sqrt(0.25 * (e_x - e_y)**2 + e_xy**2)
+    e_max = 0.5 * trace + 0.5 * shear
+    e_min = 0.5 * trace - 0.5 * shear
 
     # Store strain components in dictionary
     strain_dict = {'e_xx': exx,
@@ -111,7 +140,9 @@ def compute_stress_strain(vx, vy, dx=100, dy=-100, grad_method='numpy', inpaint=
                    'e_xy': exy,
                    'shear_magnitude': shear,
                    'dilatation': dilatation,
-                   'effective': effective_strain}
+                   'effective': effective_strain,
+                   'e_max': e_max,
+                   'e_min': e_min,}
 
     # Compute AGlen if not provided
     if AGlen is None:
