@@ -334,7 +334,7 @@ def build_temporal_model(t, poly=1, min_poly=0, periods=[0.5, 1.0], steps=[],
     return model
 
 
-def build_temporal_model_fromfile(t, userfile, cov=False):
+def build_temporal_model_fromfile(t, userfile, cov=False, **kwargs):
 
     from importlib.machinery import SourceFileLoader
 
@@ -348,7 +348,7 @@ def build_temporal_model_fromfile(t, userfile, cov=False):
         
     # Load collection
     collfun = SourceFileLoader('build', userfile).load_module()
-    collection = collfun.build(dates)
+    collection = collfun.build(dates, **kwargs)
 
     # Create a model for handling the time function
     model = Model(dates, collection=collection)
@@ -356,7 +356,7 @@ def build_temporal_model_fromfile(t, userfile, cov=False):
     # Also try to build a prior covariance matrix
     if cov:
         collfun = SourceFileLoader('computeCm', userfile).load_module()
-        Cm = collfun.computeCm(collection)
+        Cm = collfun.computeCm(collection, **kwargs)
         return model, Cm
     else:
         return model
