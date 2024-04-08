@@ -431,6 +431,31 @@ class Raster(numpy.lib.mixins.NDArrayOperatorsMixin):
         else:
             return z
 
+    def __call__(self, x, y, order=3, mode='nearest', **kwargs):
+        """
+        Interpolates the raster at a set of coordinates.
+
+        Parameters
+        ----------
+        x: ndarray
+            X-coordinates for output interpolation grid.
+        y: ndarray
+            Y-coordinates for output interpolation grid.
+        order: int, optional
+            Order for interpolation. Default: 3.
+        mode: str, optional
+            Extrapolation flag for map_coordinates. Default: 'nearest'.
+        **kwargs:
+            Keyword arguments passed to scipy.ndimage.map_coordinates.
+
+        Returns
+        -------
+        values: ndarray
+            Interpolated values.
+        """
+        values = interpolate_raster(self, x, y, order=order, mode=mode, **kwargs)
+        return np.squeeze(values)
+
     def __array__(self):
         """
         Return underlying raster data numpy array.
