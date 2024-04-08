@@ -119,9 +119,9 @@ def compute_stress_strain(
     # Shear- same result as
     # -> e_xy_max = |e_max - e_min|
     # -> e_xy_max = 2 * np.sqrt(0.25 * (e_x - e_y)**2 + e_xy**2)
-    trace = D11 + D22
-    det = D11 * D22 - D12 * D21
-    shear = np.sqrt(0.25 * trace**2 - det).reshape(Ny, Nx)
+    trace = (D11 + D22).reshape(Ny, Nx)
+    det = (D11 * D22 - D12 * D21).reshape(Ny, Nx)
+    shear = np.sqrt(0.25 * trace**2 - det)
 
     # Compute scalar quantities from stress tensors
     dilatation = (L11 + L22).reshape(Ny, Nx)
