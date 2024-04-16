@@ -9,6 +9,7 @@ from skimage.restoration.inpaint import inpaint_biharmonic
 
 import pyproj
 from osgeo import gdal, osr
+gdal.UseExceptions()
 
 import warnings
 import h5py
