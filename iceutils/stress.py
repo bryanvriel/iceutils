@@ -300,7 +300,7 @@ def gradient(z, spacing=1.0, axis=None, remask=True, method='numpy',
     return s
 
 
-def sgolay_gradient(z, spacing=1.0, axis=None, window_size=3, order=4):
+def sgolay_gradient(z, spacing=1.0, axis=None, window_size=3, order=4, pad='reflect'):
     """
     Wrapper around Savitzky-Golay code to compute window size in pixels and call _sgolay2d
     with correct arguments.
@@ -321,6 +321,8 @@ def sgolay_gradient(z, spacing=1.0, axis=None, window_size=3, order=4):
         specified as (win_y, win_x). Default: 3.
     order: int, optional
         Polynomial order. Default: 4.
+    pad: str, optional
+        Option for np.pad kwarg 'mode'. Default: 'reflect'.
 
     Returns
     -------
@@ -338,8 +340,8 @@ def sgolay_gradient(z, spacing=1.0, axis=None, window_size=3, order=4):
         dy, dx = spacing
         
         # Call Savitzky-Golay twice in order to use different window sizes
-        sy = _sgolay2d(z, wy, order=order, derivative='col')
-        sx = _sgolay2d(z, wx, order=order, derivative='row')
+        sy = _sgolay2d(z, wy, order=order, derivative='col', pad=pad)
+        sx = _sgolay2d(z, wx, order=order, derivative='row', pad=pad)
 
         # Scale by spacing and return
         return sy / dy, sx / dx
@@ -356,9 +358,9 @@ def sgolay_gradient(z, spacing=1.0, axis=None, window_size=3, order=4):
 
         # Call Savitzky-Golay
         if axis == 0:
-            s = _sgolay2d(z, w, order=order, derivative='col')
+            s = _sgolay2d(z, w, order=order, derivative='col', pad=pad)
         elif axis == 1:
-            s = _sgolay2d(z, w, order=order, derivative='row')
+            s = _sgolay2d(z, w, order=order, derivative='row', pad=pad)
         else:
             raise ValueError('Axis must be 0 or 1.')
 
@@ -715,7 +717,7 @@ def _run_ILS(Z, G, order_map, half_size_y_map, half_size_x_map, max_half_size_y,
     return x[:N_par_return]
 
 
-def _sgolay2d(z, window_size, order, derivative=None):
+def _sgolay2d(z, window_size, order, derivative=None, pad='reflect'):
     """
     Max Filter, January 2021.
 
@@ -751,7 +753,7 @@ def _sgolay2d(z, window_size, order, derivative=None):
         A[:,i] = (dx**exp[0]) * (dy**exp[1])
 
     # pad input array with appropriate values at the four borders
-    Z = np.pad(z, half_size, mode='reflect')
+    Z = np.pad(z, half_size, mode=pad)
 
     # solve system and convolve
     if derivative == None:
