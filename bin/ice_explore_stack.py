@@ -70,6 +70,8 @@ def main(args):
             mean = stack[args.frame][()]
         except KeyError:
             raise ValueError('Unsupported frame type.')
+    # Make sure frame has the right shape
+    mean = mean.reshape(stack.Ny, stack.Nx)
 
     # Check time array shape
     ds_shape = stack[args.key].shape
