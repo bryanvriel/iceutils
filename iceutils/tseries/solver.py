@@ -19,7 +19,7 @@ from .model import build_temporal_model, build_temporal_model_fromfile
 def inversion(stack, userfile, outdir, cleaned_stack=None,
               solver_type='lsqr', dkey='data', nt_out=200, n_proc=8, regParam=1.0,
               rw_iter=1, robust=False, n_nonzero_coefs=10, n_min=20, n_iter=1,
-              no_weights=False, prior_cov=True, mask_raster=None):
+              n_std=3.0, no_weights=False, prior_cov=True, mask_raster=None):
 
     # Create a time series model defined at the data points
     if prior_cov:
@@ -121,7 +121,9 @@ def inversion(stack, userfile, outdir, cleaned_stack=None,
                 
                 # Perform inversion: iterative least squares with outlier detection
                 # Outliers are set to NaN in-place
-                status, m, Cm = iterate_lsqr(solver, data_model, G, d, w, n_iter=n_iter)
+                status, m, Cm = iterate_lsqr(
+                    solver, data_model, G, d, w, n_iter=n_iter, n_std=n_std,
+                )
                 # Check if least squares failed
                 if status == FAIL:
                     continue
