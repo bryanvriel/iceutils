@@ -772,8 +772,14 @@ class RasterInfo:
             # Set attributes
             self.xstart = X[0]
             self.ystart = Y[0]
-            self.dx = X[1] - X[0]
-            self.dy = Y[1] - Y[0]
+            try:
+                self.dx = X[1] - X[0]
+            except IndexError:
+                self.dx = 1.0
+            try:
+                self.dy = Y[1] - Y[0]
+            except IndexError:
+                self.dy = 1.0
             self.ny, self.nx = Y.size, X.size
 
             # Try to read EPSG code
