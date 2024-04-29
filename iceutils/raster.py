@@ -705,7 +705,7 @@ class RasterInfo:
         # Attempt to extract projection information as an EPSG code
         try:
             self._epsg = wkt_to_epsg(dset.GetProjection(), match=match)
-        except TypeError:
+        except (TypeError, RuntimeError):
             self._epsg = None
             pass
 
