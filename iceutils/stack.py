@@ -251,6 +251,15 @@ class Stack:
         elif self.fmt == 'HWN':
             return np.nanmean(self._datasets[key], axis=2)
 
+    def median(self, key='data'):
+        """
+        Compute mean along time dimension.
+        """
+        if self.fmt == 'NHW':
+            return np.nanmedian(self._datasets[key], axis=0)
+        elif self.fmt == 'HWN':
+            return np.nanmedian(self._datasets[key], axis=2)
+
     def std(self, key='data'):
         """
         Compute standard deviation along time dimension.

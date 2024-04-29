@@ -60,6 +60,8 @@ def main(args):
         mean = stack.slice(stack.Nt - 1, key=args.key)
     elif args.frame == 'mean':
         mean = stack.mean(key=args.key)
+    elif args.frame == 'median':
+        mean = stack.median(key=args.key)
     elif args.frame == 'std':
         mean = stack.std(key=args.key)
     elif args.frame.startswith('index_'):
