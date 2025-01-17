@@ -19,6 +19,7 @@ def compute_stress_strain(
     h=None,
     b=None,
     AGlen=None,
+    BGlen=None,
     rho_ice=917.0,
     g=9.80665,
     n=3,
@@ -145,12 +146,14 @@ def compute_stress_strain(
                    'e_min': e_min,}
 
     # Compute AGlen if not provided
-    if AGlen is None:
-        from .sim import AGlen_vs_temp
-        AGlen = AGlen_vs_temp(-10.0)
+    if BGlen is None:
+        if AGlen is None:
+            from .sim import AGlen_vs_temp
+            AGlen = AGlen_vs_temp(-10.0)
+        BGlen = AGlen ** (-1 / n)
 
     # Effective viscosity
-    scale_factor = 0.5 * AGlen**(-1 / n)
+    scale_factor = 0.5 * BGlen
     eta = scale_factor * effective_strain**((1.0 - n) / n)
 
     # Compute PHYSICAL stress tensor comonents
