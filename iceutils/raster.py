@@ -31,6 +31,8 @@ gdal_type_to_numpy = {
     gdal.GDT_UInt32: np.uint32,
     gdal.GDT_Float32: np.float32,
     gdal.GDT_Float64: np.float64,
+    gdal.GDT_CInt16: np.complex64,
+    gdal.GDT_CInt32: np.complex64,
     gdal.GDT_CFloat32: np.complex64,
     gdal.GDT_CFloat64: np.complex128
 }
