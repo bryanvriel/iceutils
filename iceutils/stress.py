@@ -4,6 +4,7 @@ import numpy as np
 from itertools import product
 from functools import partial
 from multiprocessing import Pool
+from scipy.ndimage import convolve
 import sys
 
 from .raster import Raster, inpaint as _inpaint
@@ -135,6 +136,10 @@ def compute_stress_strain(
     e_max = 0.5 * trace + 0.5 * shear
     e_min = 0.5 * trace - 0.5 * shear
 
+    # Compute the angle of the first principal axis (orientation of e_max)
+    principal_angle_rad = (0.5 * np.arctan2(2 * D12, D11 - D22)).reshape(Ny, Nx)
+    principal_angle_deg = np.rad2deg(principal_angle_rad)
+
     # Store strain components in dictionary
     strain_dict = {'e_xx': exx,
                    'e_yy': eyy,
@@ -143,7 +148,8 @@ def compute_stress_strain(
                    'dilatation': dilatation,
                    'effective': effective_strain,
                    'e_max': e_max,
-                   'e_min': e_min,}
+                   'e_min': e_min,
+                   'principal_angle': principal_angle_deg}
 
     # Compute AGlen if not provided
     if BGlen is None:
@@ -838,6 +844,111 @@ def _make_odd(w):
 
 # Lambda for getting order-dependent polynomial exponents
 _compute_exps = lambda order: [(k-n, n) for k in range(order + 1) for n in range(k + 1)]
+
+
+def triangular_kernel_1d(radius: int) -> np.ndarray:
+    """
+    Builds 1D triangular kernel for filtering.
+    """
+    if radius < 0: raise ValueError("radius must be non-negative")
+    ramp = np.arange(radius + 1, dtype=float)
+    kernel_1d = np.concatenate((ramp, ramp[-2::-1]))
+    kernel_1d /= kernel_1d.sum()
+    return kernel_1d
+
+
+def triangular_smooth(
+    image: np.ndarray, radius: int = 3, mode: str = "reflect",
+) -> np.ndarray:
+    """
+    Performs 2D filtering with a triangular kernel.
+    """
+    # Optimization: If radius is 0, return original image immediately
+    if radius == 0: return image.copy()
+
+    if image.ndim != 2: raise ValueError("Input must be a 2-D array")
+    k = triangular_kernel_1d(radius)
+    temp = convolve(image, k[np.newaxis, :], mode=mode)
+    smoothed = convolve(temp, k[:, np.newaxis], mode=mode)
+    return smoothed
+
+
+def compute_radius_map(
+    image, grad=None, min_radius=1, max_radius=5, gradient_threshold_percentile=90
+):
+    """
+    Creates a map of filter radii based on image gradients.
+    High gradient (margins) -> min_radius
+    Low gradient (interior) -> max_radius
+    """
+    # Calculate Gradient Magnitude
+    # We pre-smooth slightly (sigma=1) to measure structural gradient,
+    # not noise gradient.
+    if grad is None:
+        grad = gaussian_gradient_magnitude(image, sigma=1.0)
+
+    # Determine Thresholds
+    # We want to clamp the radius at min_radius for the strongest gradients
+    low_thresh = np.percentile(grad, 10)
+    high_thresh = np.percentile(grad, gradient_threshold_percentile)
+
+    # Normalize Gradient to 0..1 range
+    # 0 = Low Gradient, 1 = High Gradient
+    norm_grad = np.clip((grad - low_thresh) / (high_thresh - low_thresh), 0, 1)
+
+    # Invert to get Radius Map
+    # High Grad (1.0) -> min_radius
+    # Low Grad (0.0) -> max_radius
+    radius_map = max_radius - (norm_grad * (max_radius - min_radius))
+
+    return radius_map
+
+
+def adaptive_triangular_smooth(image, radius_map, mode="reflect"):
+    """
+    Performs spatially variant smoothing by interpolating between
+    fixed-radius filtered layers.
+    """
+    min_r = int(np.floor(radius_map.min()))
+    max_r = int(np.ceil(radius_map.max()))
+
+    # Pre-calculate the "Bank" of filtered images
+    # layers[r] holds the image smoothed with radius 'r'
+    layers = {}
+    unique_radii = set(range(min_r, max_r + 1))
+
+    for r in unique_radii:
+        layers[r] = triangular_smooth(image, radius=r, mode=mode)
+
+    # Vectorized Interpolation
+    # We treat the radius_map as a float index between integer layers.
+    # Result = (1-w) * Layer_floor + w * Layer_ceil
+    r_floor = np.floor(radius_map).astype(int)
+    r_ceil = np.ceil(radius_map).astype(int)
+
+    # Calculate weight (fractional part)
+    # If radius_map is 3.2, weight is 0.2
+    weight = radius_map - r_floor
+
+    # Initialize output
+    output = np.zeros_like(image)
+
+    # We iterate over the unique integer radii to apply masks
+    # This is much faster than iterating over pixels
+    for r in unique_radii:
+        # Where does the floor equal this radius?
+        mask_floor = r_floor == r
+        if np.any(mask_floor):
+            # Add (1-w) * Layer[r]
+            output[mask_floor] += layers[r][mask_floor] * (1 - weight[mask_floor])
+
+        # Where does the ceil equal this radius?
+        mask_ceil = r_ceil == r
+        if np.any(mask_ceil):
+            # Add w * Layer[r]
+            output[mask_ceil] += layers[r][mask_ceil] * weight[mask_ceil]
+
+    return output
 
 
 # end of file
