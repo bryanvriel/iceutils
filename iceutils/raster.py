@@ -394,6 +394,24 @@ class Raster(numpy.lib.mixins.NDArrayOperatorsMixin):
 
         return
 
+    def mask(self, mask, mask_value=np.nan):
+        """
+        Provide a mask and set values to mask_value in place.
+
+        Parameters
+        ----------
+        mask: np.ndarray
+            Boolean mask.
+        mask_value: float, optional
+            Mask value.
+
+        Returns
+        -------
+        None
+        """
+        self.data[mask] = mask_value
+        return
+
     def transect(self, point1, point2, n=200, order=3, return_location=False):
         """
         Extract a linear transect given two tuples of (X, Y) coordinates of the
