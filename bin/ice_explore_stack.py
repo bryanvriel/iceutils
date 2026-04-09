@@ -21,6 +21,8 @@ def parse():
         help='Input stack file to display.')
     parser.add_argument('-key', action='store', type=str, default='data',
         help='Dataset to view. Default: data.')
+    parser.add_argument('-time_key', action='store', type=str, default='tdec',
+        help='Key for time vector. Default: tdec.')
     parser.add_argument('-mfile', action='store', type=str, default=None,
         help='Model stack file. Default: None.')
     parser.add_argument('-mkey', action='store', type=str, default='data',
@@ -51,7 +53,7 @@ def parse():
 def main(args):
 
     # Load the stack
-    stack = ice.Stack(args.stackfile, ds_hdr=args.key)
+    stack = ice.Stack(args.stackfile, ds_hdr=args.key, time_key=args.time_key)
 
     # Get frame
     if args.frame == 'initial':
