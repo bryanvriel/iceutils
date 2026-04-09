@@ -16,7 +16,7 @@ class Stack:
 
     def __init__(self, filename, mode='r', fmt='NHW',
                  init_stack=None, init_tdec=None, init_rasterinfo=None,
-                 init_names=None, init_data=False, ds_hdr=None):
+                 init_names=None, init_data=False, ds_hdr=None, time_key='tdec'):
         """Reads Stack from an existing HDF5 file or creates a new Stack.
 
         To create a new Stack, set mode to 'x' and specify:
@@ -42,6 +42,8 @@ class Stack:
             List of names corresponding to each Raster in a Stack.
         init_data: bool
             Whether to create a default empty dataset.
+        time_key: str, optional
+            Key for time array dataset. Default: 'tdec'
         """
         self.fid = None
         self._datasets = {}
@@ -60,7 +62,7 @@ class Stack:
 
             # Read time array
             try:
-                self.tdec = self.fid['tdec'][()]
+                self.tdec = self.fid[time_key][()]
             except KeyError:
                 try:
                     self.tdec = self.fid['t'][()]
