@@ -21,6 +21,7 @@ def compute_stress_strain(
     b=None,
     AGlen=None,
     BGlen=None,
+    T=-10.0,
     rho_ice=917.0,
     g=9.80665,
     n=3,
@@ -53,6 +54,11 @@ def compute_stress_strain(
         Input array of bed elevation for computing SSA stresses. Default: None.
     AGlen: float, optional
         Glen's flow law rate parameter in units of {a^-1} {Pa^-3}. Default: None.
+    BGlen: float, optional
+        Glen's flow law rigidity parameter in units of {Pa} {a^1/n}. Default: None.
+    T: float, optional
+        Temperature in C for computing Glen's flow law parameter if AGlen
+        is not provided. Default: -10.0.
     rho_ice: float, optional
         Density of ice in kg/m^3. Default: 917.0
     g: float, optional
@@ -155,7 +161,7 @@ def compute_stress_strain(
     if BGlen is None:
         if AGlen is None:
             from .sim import AGlen_vs_temp
-            AGlen = AGlen_vs_temp(-10.0)
+            AGlen = AGlen_vs_temp(T)
         BGlen = AGlen ** (-1 / n)
 
     # Effective viscosity
