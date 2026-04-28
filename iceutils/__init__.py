@@ -1,5 +1,8 @@
 #-*- coding: utf-8 -*-
 
+import logging
+logger = logging.getLogger(__name__)
+
 # The tools
 from .stress import *
 from .raster import *
@@ -21,8 +24,8 @@ except ImportError:
 try:
     from . import tseries
 except ImportError as err:
-    print(err)
-    pass
+    logger.warning("Could not import tseries: %s", err)
+    tseries = None
 
 # Other submodules
 from . import sim
