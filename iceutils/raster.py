@@ -5,15 +5,26 @@ import numpy.lib.mixins
 from numbers import Number
 
 from scipy.ndimage import map_coordinates
-from skimage.restoration.inpaint import inpaint_biharmonic
 
-import pyproj
-from osgeo import gdal, osr
-gdal.UseExceptions()
+try:
+    from skimage.restoration.inpaint import inpaint_biharmonic
+except ImportError:
+    inpaint_biharmonic = None
+
+import rasterio
+from rasterio import Affine
+from rasterio.crs import CRS
+from rasterio.enums import Resampling
+from rasterio.errors import WindowError
+from rasterio.transform import array_bounds
+from rasterio.windows import Window
+from rasterio.windows import crop as crop_window
+from rasterio.windows import from_bounds as window_from_bounds
+from rasterio.windows import transform as window_transform
+from rasterio.warp import calculate_default_transform, reproject
 
 import warnings
 import h5py
-import sys
 
 try:
     import cv2 as cv
@@ -22,48 +33,110 @@ except ImportError:
 
 from .boundary import transform_coordinates
 
-# Map from GDAL data type to numpy
-gdal_type_to_numpy = {
-    gdal.GDT_Byte: np.uint8,
-    gdal.GDT_Int16: np.int16,
-    gdal.GDT_Int32: np.int32,
-    gdal.GDT_UInt16: np.uint16,
-    gdal.GDT_UInt32: np.uint32,
-    gdal.GDT_Float32: np.float32,
-    gdal.GDT_Float64: np.float64,
-    gdal.GDT_CInt16: np.complex64,
-    gdal.GDT_CInt32: np.complex64,
-    gdal.GDT_CFloat32: np.complex64,
-    gdal.GDT_CFloat64: np.complex128
-}
+_SUPPORTED_READ_OPTIONS = {'out_dtype', 'masked', 'boundless', 'fill_value'}
 
-# Map from GDAL data type to Python format string
-gdal_type_to_str = {
-    gdal.GDT_Byte: 'B',
-    gdal.GDT_Int16: 'h',
-    gdal.GDT_Int32: 'i',
-    gdal.GDT_UInt16: 'H',
-    gdal.GDT_UInt32: 'I',
-    gdal.GDT_Float32: 'f',
-    gdal.GDT_Float64: 'd',
-    gdal.GDT_CFloat32: 'ff',
-    gdal.GDT_CFloat64: 'dd'
-}
 
-# Map from numpy dtype to GDAL data type
-numpy_to_gdal_type = {
-    '|b1': gdal.GDT_Byte,
-    '|i1': gdal.GDT_Byte,
-    '<i2': gdal.GDT_Int16,
-    '<i4': gdal.GDT_Int32,
-    '|u1': gdal.GDT_Byte,
-    '<u2': gdal.GDT_UInt16,
-    '<u4': gdal.GDT_UInt32,
-    '<f4': gdal.GDT_Float32,
-    '<f8': gdal.GDT_Float64,
-    '<c8': gdal.GDT_CFloat32,
-    '<c16': gdal.GDT_CFloat64
-}
+def _as_crs(epsg=None, projstr=None, crs=None):
+    """
+    Normalize common CRS inputs to rasterio's CRS object.
+    """
+    if crs is not None:
+        return CRS.from_user_input(crs)
+    if epsg is not None:
+        return CRS.from_epsg(int(epsg))
+    if projstr is not None:
+        return CRS.from_user_input(projstr)
+    return None
+
+
+def _as_dtype(dtype, data=None):
+    """
+    Normalize dtype inputs for rasterio profiles.
+    """
+    if dtype is None:
+        if data is None:
+            return None
+        return np.dtype(data.dtype).name
+    return np.dtype(dtype).name
+
+
+def _validate_read_options(options):
+    """
+    Accept a small set of rasterio read options and reject legacy TranslateOptions.
+    """
+    unsupported = sorted(set(options) - _SUPPORTED_READ_OPTIONS)
+    if unsupported:
+        raise ValueError(
+            'Unsupported raster read options for rasterio backend: %s' %
+            ', '.join(unsupported)
+        )
+    return options
+
+
+def _resampling_from_order(order):
+    """
+    Map scipy interpolation orders to rasterio resampling modes.
+    """
+    mapping = {
+        0: Resampling.nearest,
+        1: Resampling.bilinear,
+        2: Resampling.cubic,
+        3: Resampling.cubic,
+    }
+    return mapping.get(order, Resampling.cubic)
+
+
+def _normalize_slice(s, size):
+    """
+    Convert a Python slice into positive start/stop indices.
+    """
+    if s is None:
+        return 0, size
+    start, stop, step = s.indices(size)
+    if step != 1:
+        raise ValueError('Raster windows do not support stepped slices.')
+    return start, stop
+
+
+def _window_from_inputs(transform, height, width, projWin=None, islice=None, jslice=None):
+    """
+    Convert projection windows or row/column slices to a rasterio Window.
+    """
+    if projWin is None and islice is None and jslice is None:
+        return None
+
+    if projWin is not None and islice is None and jslice is None:
+        try:
+            window = window_from_bounds(
+                left=projWin[0], bottom=projWin[3],
+                right=projWin[2], top=projWin[1],
+                transform=transform
+            )
+            window = window.round_offsets().round_lengths()
+            window = crop_window(window, height, width)
+        except WindowError:
+            warnings.warn('projWin outside of bounds; returning full extent.')
+            return Window(0, 0, width, height)
+        if window.width <= 0 or window.height <= 0:
+            warnings.warn('projWin outside of bounds; returning full extent.')
+            return Window(0, 0, width, height)
+        return window
+
+    row_start, row_stop = _normalize_slice(islice, height)
+    col_start, col_stop = _normalize_slice(jslice, width)
+    return Window(col_start, row_start, col_stop - col_start, row_stop - row_start)
+
+
+def _slices_from_window(window):
+    """
+    Return row and column slices for a rasterio Window.
+    """
+    row_start = int(window.row_off)
+    col_start = int(window.col_off)
+    return (
+        slice(row_start, row_start + int(window.height)),
+        slice(col_start, col_start + int(window.width))
+    )
 
 # Dictionary for storing specific Numpy functions for operating on Raster objects
 HANDLED_NP_FUNCTIONS = {}
@@ -81,7 +154,7 @@ class Raster(numpy.lib.mixins.NDArrayOperatorsMixin):
     hdr: RasterInfo, optional
         RasterInfo associated with data.
     rasterfile: str, optional
-        Filename for GDAL-compatible raster to read.
+        Filename for rasterio-compatible raster to read.
     band: int, optional
         Band number to read from raster. Default: 1.
     stackfile: str, optional
@@ -96,7 +169,7 @@ class Raster(numpy.lib.mixins.NDArrayOperatorsMixin):
         List of [upper_left_x, upper_left_y, lower_right_x, lower_right_y] for geographic
         bounding box to subset.
     gdalOpts: dict, optional
-        Dictionary of extra gdal.TranslateOptions kwargs. Default: None.
+        Backward-compatible name for rasterio read options. Default: None.
     gdalMatch: bool, optional
         Find approximate projection info. Default: True.
     """
@@ -107,16 +180,21 @@ class Raster(numpy.lib.mixins.NDArrayOperatorsMixin):
                  rasterfile=None, band=1,
                  stackfile=None, h5path=None,
                  islice=None, jslice=None,
-                 projWin=None, gdalOpts={}, gdalMatch=True):
+                 projWin=None, gdalOpts=None, gdalMatch=True):
 
         # Default no data value
-        self.nodataval = 0
+        self.nodataval = None
+        if gdalOpts is None:
+            gdalOpts = {}
 
         # If data and header are provided, save them and return
         if data is not None and hdr is not None:
             self.data = data
             self.hdr = hdr
             self.filename = None
+            self.islice = islice
+            self.jslice = jslice
+            self.rasterfile = None
             return
 
         # Attempt to guess format of generic filename if provided
@@ -127,9 +205,9 @@ class Raster(numpy.lib.mixins.NDArrayOperatorsMixin):
             else:
                 rasterfile = filename
 
-        # Load raster data and do any subsetting using GDAL directly
+        # Load raster data and do any subsetting using rasterio directly
         if rasterfile is not None:
-            self.data, self.hdr, self.nodataval = self.load_gdal(
+            self.data, self.hdr, self.nodataval = self.load_rasterio(
                 rasterfile, band=band, projWin=projWin,
                 islice=islice, jslice=jslice,
                 gdalMatch=gdalMatch, **gdalOpts
@@ -143,7 +221,7 @@ class Raster(numpy.lib.mixins.NDArrayOperatorsMixin):
             # Read data
             self.data = self.load_hdf5(stackfile, h5path, islice=islice, jslice=jslice)
         else:
-            raise ValueError('Must provide GDAL raster of HDF5 stack.')
+            raise ValueError('Must provide rasterio-compatible raster or HDF5 stack.')
 
         # Cache the slices for provenance
         self.islice = islice
@@ -155,67 +233,56 @@ class Raster(numpy.lib.mixins.NDArrayOperatorsMixin):
         return
 
     @staticmethod
-    def load_gdal(filename, band=1, projWin=None, islice=None, jslice=None,
-                  gdalMatch=True, **gdalOpts):
+    def load_rasterio(filename, band=1, projWin=None, islice=None, jslice=None,
+                      gdalMatch=True, **gdalOpts):
         """
-        Load GDAL raster data from file.
+        Load raster data from file using rasterio.
 
         Parameters
         ----------
         filename: str
-            Filename for GDAL-compatible raster to read.
+            Filename for rasterio-compatible raster to read.
         band: int, optional
             Band number to read from raster. Default: 1.
         projWin: list, optional
-            GDAL-compatible projWin for subsetting raster. Default: None.
+            Projection window for subsetting raster. Default: None.
         islice: slice, optional
             Slice object specifying image rows to subset.
         jslice: slice, optional
             Slice object specifying image columns to subset.
         gdalMatch: bool, optional
-            Find approximate projection info. Default: True.
+            Kept for API compatibility; ignored by rasterio backend.
         gdalOpts: **kwargs
-            Extra kwargs for gdal.TranslateOptions (see https://gdal.org/python/osgeo.gdal-module.html#TranslateOptions) for complete list of options.
+            Extra rasterio read options. Supported: out_dtype, masked, boundless, fill_value.
 
         Returns
         -------
         d: ndarray
             Array for raster data.
         """
-        # Open dataset
-        dset = gdal.Open(filename, gdal.GA_ReadOnly)
+        read_opts = _validate_read_options(gdalOpts)
+        with rasterio.open(filename) as src:
+            window = _window_from_inputs(src.transform, src.height, src.width,
+                                         projWin=projWin, islice=islice, jslice=jslice)
+            d = src.read(band, window=window, **read_opts)
+            transform = src.window_transform(window) if window is not None else src.transform
+            height, width = d.shape[-2:]
+            hdr = RasterInfo(transform=transform, crs=src.crs, shape=(height, width),
+                             dtype=np.dtype(src.dtypes[band - 1]))
+            nodataval = src.nodatavals[band - 1]
 
-        # Get no-data value
-        nodataval = dset.GetRasterBand(band).GetNoDataValue()
-
-        # Compute srcWin if no projWin given and islice/jslice given
-        srcWin = None
-        if projWin is None and islice is not None and jslice is not None:
-            # Unpack the slice bounds
-            y0, y1 = int(islice.start), int(islice.stop)
-            x0, x1 = int(jslice.start), int(jslice.stop)
-            # Construct srcWin
-            srcWin = [x0, y0, x1 - x0, y1 - y0]
-
-        # Use translate to convert dataset to in-memory data
-        opts = gdal.TranslateOptions(
-            bandList=[band,], projWin=projWin, srcWin=srcWin, **gdalOpts
-        )
-        mem_ds = gdal.Translate('/vsimem/temp.tif', dset, options=opts)
-
-        # Load RasterInfo
-        hdr = RasterInfo('/vsimem/temp.tif', match=gdalMatch)
-
-        # Convert to Numy array
-        d = mem_ds.ReadAsArray()
-
-        # Close temporary datasets
-        gdal.Unlink('/vsimem/temp.tif')
-        dset = None
-        mem_ds = None
-
-        # Return array
         return d, hdr, nodataval
+
+    @staticmethod
+    def load_gdal(filename, band=1, projWin=None, islice=None, jslice=None,
+                  gdalMatch=True, **gdalOpts):
+        """
+        Compatibility alias for :meth:`load_rasterio`.
+        """
+        return Raster.load_rasterio(
+            filename, band=band, projWin=projWin, islice=islice, jslice=jslice,
+            gdalMatch=gdalMatch, **gdalOpts
+        )
 
     @staticmethod
     def load_hdf5(filename, h5path, islice=None, jslice=None):
@@ -246,23 +313,23 @@ class Raster(numpy.lib.mixins.NDArrayOperatorsMixin):
                 d = d[:,jslice]
         return d
 
-    def write_gdal(self, filename, dtype=None, driver='ENVI',
-                   epsg=None, nodataval=None, projstr=None):
+    def write_raster(self, filename, dtype=None, driver='ENVI',
+                     epsg=None, nodataval=None, projstr=None):
         """
-        Write data and header to a GDAL raster.
+        Write data and header to a rasterio-supported raster.
 
         Parameters
         ----------
         filename: str
             Filename to write raster.
-        dtype: int, optional
-            Enum for GDAL datatype. Default: gdal.GDT_Float32
+        dtype: dtype-like, optional
+            Output dtype. Default: dtype of raster data.
         driver: str, optional
-            GDAL-compatible raster driver for output raster file. Default: ENVI.
+            Rasterio/GDAL-compatible raster driver for output raster file. Default: ENVI.
         epsg: int, optional
             EPSG code for output. Default: None.
         nodataval: int, float, optional
-            No data value to pass to GDAL dataset. Default: None.
+            No data value to write into the raster metadata. Default: None.
         projstr: str, optional
             PROJ string for output if no EPSG provided. Default: None.
 
@@ -270,39 +337,37 @@ class Raster(numpy.lib.mixins.NDArrayOperatorsMixin):
         -------
         None
         """
-        # Create driver
-        driver = gdal.GetDriverByName(driver)
+        dtype = _as_dtype(dtype, data=self.data)
+        crs = _as_crs(epsg=epsg, projstr=projstr, crs=None)
+        if crs is None:
+            crs = self.hdr.crs
 
-        # Try to determine dtype if not passed
-        if dtype is None:
-            dtype = np.dtype(self.data.dtype)
-            dtype = numpy_to_gdal_type[dtype.str]
-
-        # Create dataset
-        ds = driver.Create(filename, xsize=int(self.hdr.nx), ysize=int(self.hdr.ny),
-                           bands=1, eType=dtype)
-
-        # Create geotransform and projection
-        if epsg is None and self.hdr._epsg is not None:
-            epsg = self.hdr._epsg
-        if epsg is not None or projstr is not None:
-            from osgeo import osr
-            ds.SetGeoTransform(self.hdr.geotransform)
-            srs = osr.SpatialReference()
-            if epsg is not None:
-                srs.SetFromUserInput('EPSG:%d' % epsg)
-            else:
-                srs.SetFromUserInput(projstr)
-            ds.SetProjection(srs.ExportToWkt())
-
-        # Write data
-        b = ds.GetRasterBand(1)
+        profile = {
+            'driver': driver,
+            'height': int(self.hdr.ny),
+            'width': int(self.hdr.nx),
+            'count': 1,
+            'dtype': dtype,
+            'transform': self.hdr.transform,
+        }
+        if crs is not None:
+            profile['crs'] = crs
         if nodataval is not None:
-            b.SetNoDataValue(nodataval)
-        b.WriteArray(self.data)
-        ds = None
+            profile['nodata'] = nodataval
 
+        with rasterio.open(filename, 'w', **profile) as dst:
+            dst.write(self.data.astype(dtype, copy=False), 1)
         return
+
+    def write_gdal(self, filename, dtype=None, driver='ENVI',
+                   epsg=None, nodataval=None, projstr=None):
+        """
+        Compatibility alias for :meth:`write_raster`.
+        """
+        return self.write_raster(
+            filename, dtype=dtype, driver=driver, epsg=epsg,
+            nodataval=nodataval, projstr=projstr
+        )
 
     def resample(self, hdr, **kwargs):
         """
@@ -324,8 +389,10 @@ class Raster(numpy.lib.mixins.NDArrayOperatorsMixin):
         if hdr == self.hdr:
             return
 
-        # Interpolate
-        data = interpolate_raster(self, None, None, ref_hdr=hdr, time_index=None, **kwargs)
+        # Prefer rasterio reprojection/resampling when full raster metadata is available.
+        data = _reproject_array(self.data, self.hdr, hdr, nodataval=self.nodataval, **kwargs)
+        if data is None:
+            data = interpolate_raster(self, None, None, ref_hdr=hdr, time_index=None, **kwargs)
 
         # Update members
         self.data = data
@@ -648,7 +715,7 @@ class RasterInfo:
     Parameters
     ----------
     rasterfile: str, optional
-        Filename for GDAL-compatible raster to read.
+        Filename for rasterio-compatible raster to read.
     stackfile: str, optional
         HDF5 file for Stack to read raster data from.
     X: ndarray, optional
@@ -660,7 +727,7 @@ class RasterInfo:
     epsg: int, optional
         EPSG code for input geographic data. Default: None.
     match: bool, optional
-        Find an approximate match using FindMatches. Default: True.
+        Kept for API compatibility; ignored by rasterio backend.
     islice: slice, optional
         Slice object specifying image rows to subset.
     jslice: slice, optional
@@ -668,30 +735,53 @@ class RasterInfo:
     """
 
     def __init__(self, rasterfile=None, stackfile=None, X=None, Y=None,
-                 band=1, epsg=None, match=True, islice=None, jslice=None, **kwargs):
+                 band=1, epsg=None, match=True, islice=None, jslice=None,
+                 transform=None, crs=None, shape=None, dtype=None, **kwargs):
         """
         Initialize attributes.
         """
         if rasterfile is not None:
-            self.load_gdal_info(rasterfile, islice=islice, jslice=jslice, band=band, match=match)
+            self.load_rasterio_info(rasterfile, islice=islice, jslice=jslice,
+                                    band=band, match=match)
             self.rasterfile = rasterfile
         elif stackfile is not None:
             self.load_stack_info(stackfile, islice=islice, jslice=jslice, **kwargs)
         elif X is not None and Y is not None:
             self.set_from_meshgrid(X, Y, epsg=epsg)
+        elif transform is not None and shape is not None:
+            self.ny, self.nx = int(shape[0]), int(shape[1])
+            self.transform = Affine(*transform)
+            self.crs = _as_crs(epsg=epsg, crs=crs)
+            self._epsg = self.crs.to_epsg() if self.crs is not None else None
+            self.units = 'm'
+            self.dtype = np.dtype(dtype) if dtype is not None else None
+            self._sync_from_transform()
         else:
             self.xstart = self.dx = self.ystart = self.dy = self.ny = self.nx = None
             self._epsg = None
+            self.crs = None
+            self.transform = Affine.identity()
+            self.units = 'm'
+            self.dtype = np.dtype(dtype) if dtype is not None else None
 
-    def load_gdal_info(self, rasterfile, projWin=None, islice=None, jslice=None,
-                       band=1, match=False):
+    def _sync_from_transform(self):
         """
-        Read raster and geotransform information from GDAL dataset.
+        Keep legacy scalar transform attributes in sync with the affine transform.
+        """
+        self.xstart = self.transform.c
+        self.dx = self.transform.a
+        self.ystart = self.transform.f
+        self.dy = self.transform.e
+
+    def load_rasterio_info(self, rasterfile, projWin=None, islice=None, jslice=None,
+                           band=1, match=False):
+        """
+        Read raster metadata from a rasterio dataset.
 
         Parameters
         ----------
         rasterfile: str
-            Filename for GDAL-compatible raster to read.
+            Filename for rasterio-compatible raster to read.
         projWin: list, optional
             List of [upper_left_x, upper_left_y, lower_right_x, lower_right_y] for
             geographic bounding box to subset.
@@ -702,45 +792,33 @@ class RasterInfo:
         band: int, optional
             Band number to read from raster. Default: 1.
         match: bool, optional
-            Find an approximate match using FindMatches. Default: False.
+            Kept for API compatibility; ignored by rasterio backend.
 
         Returns
         -------
         None
         """
-        # Open GDAL dataset
-        dset = gdal.Open(rasterfile, gdal.GA_ReadOnly)
+        with rasterio.open(rasterfile) as src:
+            window = _window_from_inputs(src.transform, src.height, src.width,
+                                         projWin=projWin, islice=islice, jslice=jslice)
+            self.ny = int(window.height) if window is not None else src.height
+            self.nx = int(window.width) if window is not None else src.width
+            self.transform = src.window_transform(window) if window is not None else src.transform
+            self.crs = src.crs
+            self._epsg = self.crs.to_epsg() if self.crs is not None else None
+            self.units = 'm'
+            self.dtype = np.dtype(src.dtypes[band - 1])
+            self._sync_from_transform()
 
-        # Unpack raster sizes
-        self.ny = dset.RasterYSize
-        self.nx = dset.RasterXSize
-
-        # Attempt to read geo transform
-        try:
-            self.xstart, self.dx, _, self.ystart, _, self.dy = dset.GetGeoTransform()
-        except AttributeError:
-            self.ystart = self.xstart = 0.0
-            self.dx = self.dy = 1.0
-
-        # Attempt to extract projection information as an EPSG code
-        try:
-            self._epsg = wkt_to_epsg(dset.GetProjection(), match=match)
-        except (TypeError, RuntimeError):
-            self._epsg = None
-            pass
-
-        # Optional subset
-        self.subset_region(projWin=projWin, islice=islice, jslice=jslice)
-
-        # Set units (not yet used)
-        self.units = 'm'
-
-        # Get data type from band
-        b = dset.GetRasterBand(band)
-        self.dtype = gdal_type_to_numpy[b.DataType]
-
-        # Close dataset
-        dset = None
+    def load_gdal_info(self, rasterfile, projWin=None, islice=None, jslice=None,
+                       band=1, match=False):
+        """
+        Compatibility alias for :meth:`load_rasterio_info`.
+        """
+        return self.load_rasterio_info(
+            rasterfile, projWin=projWin, islice=islice, jslice=jslice,
+            band=band, match=match
+        )
 
     def load_stack_info(self, stackfile, ds=None, islice=None, jslice=None):
         """
@@ -789,27 +867,21 @@ class RasterInfo:
             if jslice is not None:
                 X = X[jslice]
 
-            # Set attributes
-            self.xstart = X[0]
-            self.ystart = Y[0]
-            try:
-                self.dx = X[1] - X[0]
-            except IndexError:
-                self.dx = 1.0
-            try:
-                self.dy = Y[1] - Y[0]
-            except IndexError:
-                self.dy = 1.0
-            self.ny, self.nx = Y.size, X.size
-
             # Try to read EPSG code
             try:
-                self._epsg = fid.attrs['EPSG']
+                epsg = int(fid.attrs['EPSG'])
             except KeyError:
-                self._epsg = None
+                epsg = None
+
+            # Set attributes using the same affine-aware path as rasters.
+            self.set_from_meshgrid(*np.meshgrid(X, Y), epsg=epsg)
 
             # Set units
             self.units = 'm'
+
+            # Set dtype when a reference dataset is available
+            if ds is not None and ds in fid:
+                self.dtype = fid[ds].dtype
 
     def subset_region(self, projWin=None, islice=None, jslice=None):
         """
@@ -833,39 +905,14 @@ class RasterInfo:
         jslice: slice
             Slice object specifying image columns to subset.
         """
-        # Convert any projection window into image coordinates
-        if projWin is not None and islice is None and jslice is None:
+        window = _window_from_inputs(self.transform, self.ny, self.nx,
+                                     projWin=projWin, islice=islice, jslice=jslice)
+        if window is not None:
+            islice, jslice = _slices_from_window(window)
+            self.transform = window_transform(window, self.transform)
+            self.ny, self.nx = int(window.height), int(window.width)
+            self._sync_from_transform()
 
-            # First check the points
-            in_bounds = self.contains_point(projWin[0], projWin[1])
-            in_bounds *= self.contains_point(projWin[2], projWin[3])
-
-            # If not in bounds, return slices for full image
-            if not in_bounds:
-                warnings.warn('projWin outside of bounds; returning full extent.')
-                islice = slice(0, self.ny)
-                jslice = slice(0, self.nx)
-
-            # Otherwise, compute slices
-            else:
-                # Convert coordinates
-                i0, j0 = self.xy_to_imagecoord(projWin[0], projWin[1])
-                i1, j1 = self.xy_to_imagecoord(projWin[2], projWin[3])
-                # Construct slices
-                islice = slice(i0, i1)
-                jslice = slice(j0, j1)
-
-        # Apply row slicing
-        if islice is not None:
-            self.ystart += islice.start * self.dy
-            self.ny = islice.stop - islice.start
-
-        # Apply column slicing
-        if jslice is not None:
-            self.xstart += jslice.start * self.dx
-            self.nx = jslice.stop - jslice.start
-
-        # Return slices
         return islice, jslice
 
     def set_from_meshgrid(self, X, Y, epsg=None, units='m'):
@@ -883,13 +930,19 @@ class RasterInfo:
         units: str, optional
             Units of coordinates.
         """
-        self.xstart = X[0,0]
-        self.ystart = Y[0,0]
-        self.dx = X[0,1] - X[0,0]
-        self.dy = Y[1,0] - Y[0,0]
+        X = np.asarray(X)
+        Y = np.asarray(Y)
         self.ny, self.nx = X.shape
-        self._epsg = epsg
+        a = X[0,1] - X[0,0] if self.nx > 1 else 1.0
+        d = Y[0,1] - Y[0,0] if self.nx > 1 else 0.0
+        b = X[1,0] - X[0,0] if self.ny > 1 else 0.0
+        e = Y[1,0] - Y[0,0] if self.ny > 1 else 1.0
+        self.transform = Affine(a, b, X[0,0], d, e, Y[0,0])
+        self.crs = _as_crs(epsg=epsg)
+        self._epsg = self.crs.to_epsg() if self.crs is not None else None
         self.units = units
+        self.dtype = None
+        self._sync_from_transform()
 
     def crop(self, xmin, xmax, ymin, ymax):
         """
@@ -911,6 +964,8 @@ class RasterInfo:
         -------
         None
         """
+        self._require_rectilinear()
+
         # Construct coordinates
         x = self.xcoords
         y = self.ycoords
@@ -921,24 +976,26 @@ class RasterInfo:
         x = x[xmask]
         y = y[ymask]
 
-        # Save new starting coordinates and sizes
-        self.xstart = x[0]
-        self.ystart = y[0]
-        self.nx = len(x)
-        self.ny = len(y)
+        if len(x) == 0 or len(y) == 0:
+            raise ValueError('Crop bounds do not overlap raster.')
+
+        rows = np.flatnonzero(ymask)
+        cols = np.flatnonzero(xmask)
+        self.subset_region(islice=slice(rows[0], rows[-1] + 1),
+                           jslice=slice(cols[0], cols[-1] + 1))
 
         return xmask, ymask
 
     def read_GCPs(self, rasterfile=None, gcp_epsg=None, epsg_out=None, k=3, s=5, scale=1.0):
         """
-        Load ground control points (GCPs) from gdal Dataset. Then, construct 2D
+        Load ground control points (GCPs) from rasterio Dataset. Then, construct 2D
         interpolating splines that represent mapping from image to georeferenced
         coordinates with mapping determined from GCPs.
 
         Parameters
         ----------
         rasterfile: str, optional
-            GDAL raster file to read GCPs from. Use cached source raster by default.
+            Raster file to read GCPs from. Use cached source raster by default.
         gcp_epsg: int, optional
             Override EPSG code for GCP coordinates. Default determined from GCP projection.
         epsg_out: int, optional
@@ -961,17 +1018,10 @@ class RasterInfo:
             rasterfile = self.rasterfile
         assert rasterfile is not None, 'No valid raster file specified.'
 
-        # Read GCP coordinates
-        ds = gdal.Open(rasterfile, gdal.GA_ReadOnly)
-        GCPs = ds.GetGCPs()
-
-        # Read GCP projection info if not specified
-        if gcp_epsg is None:
-            gcp_proj = ds.GetGCPProjection()
-            gcp_epsg = wkt_to_epsg(gcp_proj)
-
-        # Close the dataset
-        ds = None
+        with rasterio.open(rasterfile) as src:
+            GCPs, gcp_crs = src.gcps
+            if gcp_epsg is None and gcp_crs is not None:
+                gcp_epsg = gcp_crs.to_epsg()
 
         # Unpack GCP information
         N_gcp = len(GCPs)
@@ -980,7 +1030,7 @@ class RasterInfo:
         x = np.zeros(N_gcp)
         y = np.zeros(N_gcp)
         for i, gcp in enumerate(GCPs):
-            pixel[i], line[i], x[i], y[i] = gcp.GCPPixel, gcp.GCPLine, gcp.GCPX, gcp.GCPY
+            pixel[i], line[i], x[i], y[i] = gcp.col, gcp.row, gcp.x, gcp.y
 
         # Convert GCP coordinates to another projection if needed
         if epsg_out != gcp_epsg:
@@ -1000,11 +1050,12 @@ class RasterInfo:
         Check for equivalence in headers.
         """
         if self.shape != other.shape: return False
-        for attr in ('xstart', 'ystart', 'dx', 'dy'):
-            if abs(getattr(self, attr) - getattr(other, attr)) > 1.0e-8:
-                return False
-            if self.units != other.units:
-                return False
+        if not np.allclose(tuple(self.transform), tuple(other.transform), atol=1.0e-8):
+            return False
+        if self.units != other.units:
+            return False
+        if self.crs is not None and other.crs is not None and self.crs != other.crs:
+            return False
         return True
 
     def contains_point(self, x, y):
@@ -1052,13 +1103,36 @@ class RasterInfo:
         else:
             raise ValueError('Unit %s not supported.' % out_units)
 
-        # Apply scale
-        for attr in ('xstart', 'ystart', 'dx', 'dy'):
-            value = getattr(self, attr)
-            setattr(self, attr, value * scale)
+        # Apply scale to the full affine transform.
+        self.transform = Affine(
+            self.transform.a * scale, self.transform.b * scale, self.transform.c * scale,
+            self.transform.d * scale, self.transform.e * scale, self.transform.f * scale
+        )
+        self._sync_from_transform()
 
         # Done
         return
+
+    @property
+    def is_rectilinear(self):
+        """
+        True when the affine transform has no rotation or shear terms.
+        """
+        return abs(self.transform.b) < 1.0e-12 and abs(self.transform.d) < 1.0e-12
+
+    def _require_rectilinear(self):
+        """
+        Guard helpers that only make sense as one-dimensional x/y coordinates.
+        """
+        if not self.is_rectilinear:
+            raise ValueError('Use meshgrid() for rasters with rotated or skewed affine transforms.')
+
+    @property
+    def bounds(self):
+        """
+        Return raster bounds as (west, south, east, north).
+        """
+        return array_bounds(self.ny, self.nx, self.transform)
 
     @property
     def shape(self):
@@ -1072,22 +1146,33 @@ class RasterInfo:
         """
         Return pixel spacing.
         """
-        return (self.dy, self.dx)
+        return (self.transform.e, self.transform.a)
 
     @property
     def xstop(self):
-        return self.xstart + (self.nx - 1) * self.dx
+        if self.is_rectilinear:
+            return self.xstart + self.nx * self.dx
+        return self.bounds[2]
 
     @property
     def ystop(self):
-        return self.ystart + (self.ny - 1) * self.dy
+        if self.is_rectilinear:
+            return self.ystart + self.ny * self.dy
+        return self.bounds[1]
 
     @property
     def geotransform(self):
         """
         Return GDAL-compatible geo transform array.
         """
-        return [self.xstart, self.dx, 0.0, self.ystart, 0.0, self.dy]
+        return [
+            self.transform.c,
+            self.transform.a,
+            self.transform.b,
+            self.transform.f,
+            self.transform.d,
+            self.transform.e
+        ]
 
     @property
     def epsg(self):
@@ -1104,7 +1189,8 @@ class RasterInfo:
         """
         Return matplotlib-compatible extent of (left, right, bottom, top).
         """
-        return np.array([self.xstart, self.xstop, self.ystop, self.ystart])
+        west, south, east, north = self.bounds
+        return np.array([west, east, south, north])
 
     @property
     def projWin(self):
@@ -1112,41 +1198,47 @@ class RasterInfo:
         Return GDAL-style projection window of:
         [upper_left_x, upper_left_y, lower_right_x, lower_right_y].
         """
-        return np.array([self.xstart, self.ystart, self.xstop, self.ystop])
+        west, south, east, north = self.bounds
+        return np.array([west, north, east, south])
 
     @property
     def xlim(self):
         """
         Return matplotlib-compatible x-limits (left, right).
         """
-        return np.array([self.xstart, self.xstop])
+        west, _, east, _ = self.bounds
+        return np.array([west, east])
 
     @property
     def ylim(self):
         """
         Return matplotlib-compatible y-limits (bottom, top).
         """
-        return np.array([self.ystop, self.ystart])
+        _, south, _, north = self.bounds
+        return np.array([south, north])
 
     @property
     def xspan(self):
         """
         Returns spatial span in X direction.
         """
-        return abs(self.xstop - self.xstart)
+        west, _, east, _ = self.bounds
+        return abs(east - west)
 
     @property
     def yspan(self):
         """
         Returns spatial span in Y direction.
         """
-        return abs(self.ystart - self.ystop)
+        _, south, _, north = self.bounds
+        return abs(north - south)
 
     @property
     def xcoords(self):
         """
         Returns array of X coordinates.
         """
+        self._require_rectilinear()
         return self.xstart + self.dx * np.arange(self.nx)
 
     @property
@@ -1154,13 +1246,15 @@ class RasterInfo:
         """
         Returns array of Y coordinates.
         """
+        self._require_rectilinear()
         return self.ystart + self.dy * np.arange(self.ny)
 
     def meshgrid(self):
         """
         Construct meshgrids for geo coordinates.
         """
-        return np.meshgrid(self.xcoords, self.ycoords)
+        col, row = self.coord_meshgrid()
+        return self.imagecoord_to_xy(row, col)
 
     def coord_meshgrid(self):
         """
@@ -1170,20 +1264,21 @@ class RasterInfo:
         col = np.arange(self.nx, dtype=int)
         return np.meshgrid(col, row)
 
-    def xy_to_imagecoord(self, x, y):
+    def xy_to_imagecoord(self, x, y, round_values=True):
         """
         Converts geographic XY point to row and column coordinate.
         """
-        row = (np.round((y - self.ystart) / self.dy)).astype(int)
-        col = (np.round((x - self.xstart) / self.dx)).astype(int)
+        col, row = (~self.transform) * (x, y)
+        if round_values:
+            row = np.round(row).astype(int)
+            col = np.round(col).astype(int)
         return row, col
 
     def imagecoord_to_xy(self, row, col):
         """
         Converts row and column coordinate to geographic XY.
         """
-        y = self.ystart + row * self.dy
-        x = self.xstart + col * self.dx
+        x, y = self.transform * (col, row)
         return x, y
 
     def xy_to_imagecoord_gcp(self, x, y):
@@ -1275,8 +1370,7 @@ def interpolate_array(array, hdr, x, y, ref_hdr=None, **kwargs):
         y = np.array([y])
 
     # Ravel points to 1D
-    row = (y.ravel() - hdr.ystart) / hdr.dy
-    col = (x.ravel() - hdr.xstart) / hdr.dx
+    row, col = hdr.xy_to_imagecoord(x.ravel(), y.ravel(), round_values=False)
     coords = np.vstack((row, col))
 
     # Interpolate
@@ -1284,6 +1378,38 @@ def interpolate_array(array, hdr, x, y, ref_hdr=None, **kwargs):
 
     # Recover original shape and return
     return values.reshape(x.shape)
+
+
+def _reproject_array(array, src_hdr, dst_hdr, nodataval=None, order=3, **kwargs):
+    """
+    Reproject or resample an array with rasterio when complete spatial metadata exists.
+    """
+    if src_hdr.transform is None or dst_hdr.transform is None:
+        return None
+    if src_hdr.crs is None or dst_hdr.crs is None:
+        return None
+
+    dst_nodata = kwargs.get('dst_nodata', kwargs.get('cval', None))
+    src_nodata = kwargs.get('src_nodata', nodataval)
+    fill_value = 0 if dst_nodata is None else dst_nodata
+    try:
+        destination = np.full(dst_hdr.shape, fill_value, dtype=array.dtype)
+    except ValueError:
+        destination = np.zeros(dst_hdr.shape, dtype=array.dtype)
+
+    reproject(
+        source=array,
+        destination=destination,
+        src_transform=src_hdr.transform,
+        src_crs=src_hdr.crs,
+        src_nodata=src_nodata,
+        dst_transform=dst_hdr.transform,
+        dst_crs=dst_hdr.crs,
+        dst_nodata=dst_nodata,
+        resampling=_resampling_from_order(order),
+        num_threads=kwargs.get('num_threads', 1)
+    )
+    return destination
 
 def warp(raster, target_epsg=None, target_srs=None, source_srs=None,
          target_hdr=None, target_dims=None, target_res=None,
@@ -1318,103 +1444,44 @@ def warp(raster, target_epsg=None, target_srs=None, source_srs=None,
     warped_raster: Raster
         Output warped Raster object.
     """
-    # Check source RasterInfo has EPSG value set or source_srs is provided
-    if raster.hdr.epsg is None:
-        assert source_srs is not None, 'Must provide source_srs since no EPSG found for input.'
-        src_proj = pyproj.CRS.from_string(source_srs)
+    src_crs = raster.hdr.crs
+    if src_crs is None and source_srs is not None:
+        src_crs = CRS.from_user_input(source_srs)
+    if src_crs is None:
+        raise AssertionError('Must provide source_srs since no CRS found for input.')
+
+    if target_epsg is not None:
+        dst_crs = CRS.from_epsg(target_epsg)
+    elif target_srs is not None:
+        dst_crs = CRS.from_user_input(target_srs)
+    elif target_hdr is not None and target_hdr.crs is not None:
+        dst_crs = target_hdr.crs
     else:
-        src_proj = pyproj.CRS.from_epsg(raster.hdr.epsg)
+        raise ValueError('Must provide RasterInfo, target_epsg, or target_srs.')
 
-    # Create target projection
-    if target_epsg is None:
-        if target_hdr is not None and target_hdr.epsg is not None:
-            trg_proj = pyproj.CRS.from_epsg(target_hdr.epsg)
-        elif target_srs is not None:
-            trg_proj = pyproj.CRS.from_string(target_srs)
-        else:
-            raise ValueError('Must provide RasterInfo or target_srs.')
-    elif target_epsg is not None:
-        trg_proj = pyproj.CRS.from_epsg(target_epsg)
-
-    # If only EPSG code is provided, compute target grid
     if target_hdr is None:
-
-        # Convert bounding coordinates from source to target projection
-        src_xmin, src_xmax = raster.hdr.xlim
-        src_ymin, src_ymax = raster.hdr.ylim
-        x0, y0 = transform_coordinates(src_xmin, src_ymax, crs_in=src_proj, crs_out=trg_proj)
-        x1, y1 = transform_coordinates(src_xmax, src_ymax, crs_in=src_proj, crs_out=trg_proj)
-        x2, y2 = transform_coordinates(src_xmax, src_ymin, crs_in=src_proj, crs_out=trg_proj)
-        x3, y3 = transform_coordinates(src_xmin, src_ymin, crs_in=src_proj, crs_out=trg_proj)
-        xvals = np.array([x0, x1, x2, x3])
-        yvals = np.array([y0, y1, y2, y3])
-        trg_xmin, trg_xmax = np.min(xvals), np.max(xvals)
-        trg_ymin, trg_ymax = np.min(yvals), np.max(yvals)
-
-        # Get target dimensions from user input or source raster
+        kwargs_transform = {}
         if target_dims is not None:
-            out_ny, out_nx = target_dims
+            kwargs_transform['dst_height'], kwargs_transform['dst_width'] = target_dims
         elif target_res is not None:
-            out_ny = int(np.floor((trg_ymax - trg_ymin) / target_res)) + 1
-            out_nx = int(np.floor((trg_xmax - trg_xmin) / target_res)) + 1
-        else:
-            out_ny, out_nx = raster.hdr.ny, raster.hdr.nx
+            kwargs_transform['resolution'] = target_res
 
-        # Construct meshgrid with same dimensions (may be a bad idea in polar regions)
-        xarr = np.linspace(trg_xmin, trg_xmax, out_nx)
-        yarr = np.linspace(trg_ymax, trg_ymin, out_ny)
-        trg_x, trg_y = np.meshgrid(xarr, yarr)
-
-        # Create a RasterInfo object for target
-        target_hdr = RasterInfo(X=trg_x, Y=trg_y, epsg=target_epsg)
-
-    # Otherwise, get meshgrid straight from target_hdr
+        dst_transform, dst_width, dst_height = calculate_default_transform(
+            src_crs, dst_crs, raster.hdr.nx, raster.hdr.ny, *raster.hdr.bounds,
+            **kwargs_transform
+        )
+        target_hdr = RasterInfo(transform=dst_transform, crs=dst_crs,
+                                shape=(dst_height, dst_width), dtype=raster.data.dtype)
     else:
-        trg_x, trg_y = target_hdr.meshgrid()
+        if target_hdr.crs is None or target_hdr.crs != dst_crs:
+            target_hdr = RasterInfo(transform=target_hdr.transform, crs=dst_crs,
+                                    shape=target_hdr.shape, dtype=raster.data.dtype)
 
-    # Chunk geometry
-    chunks = get_chunks(trg_x.shape, 128, 128)
-    n_chunks = len(chunks)
-
-    # Perform transformation on chunks in parallel
-    if n_proc > 1:
-        from . import pymp
-
-        manager = pymp.Manager()
-        data_warped = pymp.array(trg_y.shape, dtype=raster.data.dtype)
-
-        # Loop over chunks
-        with pymp.Parallel(n_proc, manager) as parallel:
-            for k in parallel.range(n_chunks):
-
-                # Convert target coordinates to source coordinates
-                islice, jslice = chunks[k]
-                src_x, src_y = transform_coordinates(
-                    trg_x[islice, jslice],
-                    trg_y[islice, jslice],
-                    crs_in=trg_proj, crs_out=src_proj
-                )
-
-                # Interpolate source raster
-                data_warped[islice, jslice] = interpolate_raster(raster, src_x, src_y,
-                                                                 ref_hdr=None, time_index=None,
-                                                                 **kwargs)
-
-    else:
-        data_warped = np.zeros(trg_y.shape, dtype=raster.data.dtype)
-        for k in range(n_chunks):
-            # Convert target coordinates to source coordinates
-            islice, jslice = chunks[k]
-            src_x, src_y = transform_coordinates(
-                trg_x[islice, jslice],
-                trg_y[islice, jslice],
-                crs_in=trg_proj, crs_out=src_proj
-            )
-
-            # Interpolate source raster
-            data_warped[islice, jslice] = interpolate_raster(raster, src_x, src_y,
-                                                             ref_hdr=None, time_index=None, 
-                                                             **kwargs)
+    data_warped = _reproject_array(
+        raster.data, RasterInfo(transform=raster.hdr.transform, crs=src_crs,
+                                shape=raster.hdr.shape, dtype=raster.data.dtype),
+        target_hdr, nodataval=raster.nodataval, num_threads=n_proc, **kwargs
+    )
 
     # Return new raster
     return Raster(data=data_warped, hdr=target_hdr)
@@ -1468,49 +1535,51 @@ def warp_with_gcp_splines(raster, gcp_hdr, x=None, y=None, out_hdr=None, order=3
     # Create new Raster
     return Raster(data=out.reshape(x.shape), hdr=out_hdr)
 
-def write_gdal(arrays, filename, geotransform=None, epsg=None,
-               projstr=None, driver='ENVI', nodataval=None, dtype=None):
+def write_raster(arrays, filename, geotransform=None, epsg=None,
+                 projstr=None, driver='ENVI', nodataval=None, dtype=None):
     """
-    Global function for writing arrays to GDAL file with projection
+    Global function for writing arrays to raster file with projection
     information.
     """
-    # Create driver
-    driver = gdal.GetDriverByName(driver)
-
     # If only a single array is passed, make a tuple
     if not isinstance(arrays, tuple):
         arrays = (arrays,)
     n_bands = len(arrays)
     Ny, Nx = arrays[0].shape
 
-    # Try to determine dtype if not passed
-    if dtype is None:
-        dtype = np.dtype(arrays[0].dtype)
-        dtype = numpy_to_gdal_type[dtype.str]
-
-    # Create dataset
-    ds = driver.Create(filename, xsize=Nx, ysize=Ny, bands=n_bands, eType=dtype)
-
-    # Create geotransform and projection
+    dtype = _as_dtype(dtype, data=arrays[0])
+    transform = Affine.identity()
     if geotransform is not None:
-        ds.SetGeoTransform(geotransform)
-    if epsg is not None or projstr is not None:
-        srs = osr.SpatialReference()
-        if epsg is not None:
-            srs.SetFromUserInput('EPSG:%d' % epsg)
-        else:
-            srs.SetFromUserInput(projstr)
-        ds.SetProjection(srs.ExportToWkt())
+        transform = Affine.from_gdal(*geotransform)
+    crs = _as_crs(epsg=epsg, projstr=projstr)
 
-    # Write data
-    for bcnt, array in enumerate(arrays):
-        b = ds.GetRasterBand(bcnt + 1)
-        if nodataval is not None:
-            b.SetNoDataValue(nodataval)
-        b.WriteArray(array)
+    profile = {
+        'driver': driver,
+        'height': Ny,
+        'width': Nx,
+        'count': n_bands,
+        'dtype': dtype,
+        'transform': transform,
+    }
+    if crs is not None:
+        profile['crs'] = crs
+    if nodataval is not None:
+        profile['nodata'] = nodataval
 
-    # Close dataset
-    ds = None
+    with rasterio.open(filename, 'w', **profile) as dst:
+        for bcnt, array in enumerate(arrays):
+            dst.write(array.astype(dtype, copy=False), bcnt + 1)
+
+
+def write_gdal(arrays, filename, geotransform=None, epsg=None,
+               projstr=None, driver='ENVI', nodataval=None, dtype=None):
+    """
+    Compatibility alias for :func:`write_raster`.
+    """
+    return write_raster(
+        arrays, filename, geotransform=geotransform, epsg=epsg,
+        projstr=projstr, driver=driver, nodataval=nodataval, dtype=dtype
+    )
 
 def write_array_as_raster(array, hdr, filename, epsg=None, projstr=None,
                           dtype=None, driver='ENVI'):
@@ -1529,8 +1598,8 @@ def write_array_as_raster(array, hdr, filename, epsg=None, projstr=None,
         Specific EPSG code for output projection. Default: None.
     projstr: str, optional
             PROJ string for output if no EPSG provided. Default: None.
-    dtype: int, optional
-        Enum for GDAL datatype for output raster. Default: None.
+    dtype: dtype-like, optional
+        Output dtype. Default: dtype of input array.
 
     Returns
     -------
@@ -1540,15 +1609,11 @@ def write_array_as_raster(array, hdr, filename, epsg=None, projstr=None,
     assert array.shape == (hdr.ny, hdr.nx), 'Incompatible shapes'
     # Write raster
     raster = Raster(data=array, hdr=hdr)
-    # Try to determine dtype if not passed
-    if dtype is None:
-        dtype = np.dtype(array.dtype)
-        dtype = numpy_to_gdal_type[dtype.str]
     # Check if header has EPSG code
     if epsg is None and hdr.epsg is not None:
         epsg = hdr.epsg
     # Write
-    raster.write_gdal(filename, epsg=epsg, projstr=projstr, dtype=dtype, driver=driver)
+    raster.write_raster(filename, epsg=epsg, projstr=projstr, dtype=dtype, driver=driver)
 
 def griddata(x, y, z, hdr=None, dx=100, dy=100, x_extent=None, y_extent=None,
              method='linear', epsg=None):
@@ -1661,6 +1726,8 @@ def inpaint(raster, mask=None, method='spring', r=3.0):
     elif method == 'telea': 
         umask = mask.astype(np.uint8)
         inpainted = cv.inpaint(rdata, umask, r, cv.INPAINT_TELEA)
+    elif method == 'biharmonic' and inpaint_biharmonic is None:
+        raise ImportError('scikit-image is required for biharmonic inpainting.')
     elif method == 'biharmonic': 
         inpainted = inpaint_biharmonic(rdata, mask, multichannel=False)
     else:
@@ -1819,23 +1886,13 @@ def render_kml(raster, filename, dpi=300, cmap='viridis', clim=None, colorbar=Fa
 def wkt_to_epsg(wkt, match=False):
     """
     Convenience function to convert a projection formatted as a WKT (Well Known Transformation)
-    to an EPSG code. Sometimes AutoIdentifyEPSG cannot determine the correct projection,
-    and we need to find an approximate match using FindMatches (specify match=True).
+    to an EPSG code. The match argument is kept for compatibility and is ignored by
+    the rasterio backend.
     """
-    proj = osr.SpatialReference(wkt=wkt)
-    if match:
-        try:
-            match_proj = proj.FindMatches()[0][0]
-            match_proj.AutoIdentifyEPSG()
-            epsg = int(match_proj.GetAttrValue('AUTHORITY', 1))
-        except IndexError:
-            # Match may fail; fall back to auto-identification
-            proj.AutoIdentifyEPSG()
-            epsg = int(proj.GetAttrValue('AUTHORITY', 1))
-    else: 
-        proj.AutoIdentifyEPSG()
-        epsg = int(proj.GetAttrValue('AUTHORITY', 1))
-    return epsg
+    if wkt is None or wkt == '':
+        return None
+    crs = CRS.from_user_input(wkt)
+    return crs.to_epsg()
 
 def get_chunks(dims, chunk_y, chunk_x):
     """

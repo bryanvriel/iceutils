@@ -1,7 +1,7 @@
 numpy
 scipy
 matplotlib
-gdal
+rasterio
 h5py
 pyproj
 scikit-image
