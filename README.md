@@ -14,7 +14,7 @@ Prior to installing `iceutils`, we'll need to install a number of Python depende
 numpy
 scipy
 matplotlib
-gdal
+rasterio
 h5py
 pyproj
 scikit-image
@@ -62,7 +62,7 @@ t = ice.generateRegularTimeArray(tmin, tmax)
 
 ## Raster interface
 
-In the file `raster.py` are two classes, `Raster` and `RasterInfo`. The former encapsulates basic raster-type data (i.e., 2D imagery) and provides some convenience functions to interface with the GDAL Python API. Therefore, any raster format that is compatible with GDAL can be read in with the `Raster` class, e.g.:
+In the file `raster.py` are two classes, `Raster` and `RasterInfo`. The former encapsulates basic raster-type data (i.e., 2D imagery) and provides some convenience functions for rasterio/GDAL-backed raster I/O. Therefore, any raster format that is compatible with rasterio can be read in with the `Raster` class, e.g.:
 
 ```python
 raster = ice.Raster(rasterfile='velocity.tif')
@@ -79,12 +79,12 @@ print(raster.hdr.dy)      # Y-spacing
 
 ### Loading rasters
 
-As shown before, one can load raster files by providing the path to the GDAL-compatible file via the keyword argument `rasterfile=` (later, we'll see how to interface with certain HDF5 datasets using a different keyword argument):
+As shown before, one can load raster files by providing the path to the rasterio-compatible file via the keyword argument `rasterfile=` (later, we'll see how to interface with certain HDF5 datasets using a different keyword argument):
 
 ```python
 raster = ice.Raster(rasterfile='velocity.tif')
 ```
-If you would like to load only a subset of the raster, you may provide a GDAL-compatible projection window (e.g., `projWin`) defined by the standard `[ulx, uly, lrx, lry]`:
+If you would like to load only a subset of the raster, you may provide a projection window (e.g., `projWin`) defined by the standard `[ulx, uly, lrx, lry]`:
 
 ```python
 # Projection window (same coordinate system/SRS as raster)
@@ -112,12 +112,12 @@ Of course, for both the `projWin` and `islice/jslice` interfaces, the `RasterInf
 
 ### Writing rasters to file
 
-To dump raster data to a file, we use the `Raster.write_gdal` function:
+To dump raster data to a file, use the `Raster.write_raster` function:
 
 ```python
-raster.write_gdal('output.dat', driver='ENVI', epsg=3413)
+raster.write_raster('output.dat', driver='ENVI', epsg=3413)
 ```
-Any GDAL-compatible driver can be passed to the `driver` keyword argument (e.g., `'GTiff'`, `'ISCE'`, `'GMT'`, etc.). Additionally, one can pass in an EPSG code to specify the coordinate system of the data in order for GDAL to write relevant projection data (as shown in the example above; if `epsg=None`, the EPSG code is retrieved from the `hdr` attribute of the raster).
+Any rasterio/GDAL-compatible driver can be passed to the `driver` keyword argument (e.g., `'GTiff'`, `'ISCE'`, `'GMT'`, etc.). Additionally, one can pass in an EPSG code to specify the coordinate system of the data in order for the backend to write relevant projection data (as shown in the example above; if `epsg=None`, the CRS is retrieved from the `hdr` attribute of the raster). The previous `Raster.write_gdal` name is retained as a compatibility alias.
 
 Alternatively, we can write a NumPy array directly to a raster if we have an associated `RasterInfo` object.
 ```

@@ -19,7 +19,7 @@ def parse():
     parser.add_argument('-srs_epsg', action='store', type=int, default=None,
                         help='Force source EPSG code.')
     parser.add_argument('-driver', action='store', type=str, default='ENVI',
-                        help='GDAL driver. Default: ENVI.')
+                        help='Rasterio/GDAL driver. Default: ENVI.')
     parser.add_argument('-dtype', action='store', type=str, default=None,
                         help='Force the output data type.')
     parser.add_argument('-b', action='store', type=int, default=1, dest='band',
