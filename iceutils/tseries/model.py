@@ -226,7 +226,7 @@ def predict(stack_list, time_index, name='recon', islice=None, jslice=None):
     # Compute reconstruction
     fit = 0.0
     for stack in stack_list:
-        fit += stack[name][time_index, islice, jslice]
+        fit += stack[name].isel(time=time_index, y=islice, x=jslice).values
 
     return fit
 

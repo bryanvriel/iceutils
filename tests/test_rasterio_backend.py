@@ -4,6 +4,7 @@ import tempfile
 import h5py
 import numpy as np
 import pytest
+import xarray as xr
 import rasterio
 from rasterio import Affine
 from rasterio.crs import CRS
@@ -14,6 +15,7 @@ from rasterio.warp import calculate_default_transform, reproject
 os.environ.setdefault("MPLCONFIGDIR", os.path.join(tempfile.gettempdir(), "iceutils-mpl"))
 
 from iceutils.raster import Raster, RasterInfo, warp, write_gdal
+from iceutils.stack import Stack, TIME_UNITS
 
 
 def _write_geotiff(path, data, transform=None, crs="EPSG:3413", nodata=None):
@@ -192,3 +194,83 @@ def test_stack_rasterinfo_keeps_existing_hdf5_layout(tmp_path):
     assert tuple(hdr.transform) == tuple(Affine(2.0, 0.0, 10.0, 0.0, -3.0, 20.0))
     assert np.array_equal(hdr.xcoords, np.array([10.0, 12.0, 14.0]))
     assert np.array_equal(hdr.ycoords, np.array([20.0, 17.0]))
+
+
+def test_stack_writes_xarray_format_with_unix_second_time_encoding(tmp_path):
+    path = tmp_path / "stack_xarray.h5"
+    hdr = RasterInfo(
+        transform=Affine(2.0, 0.0, 10.0, 0.0, -3.0, 20.0),
+        crs=CRS.from_epsg(3413),
+        shape=(2, 3),
+    )
+    tdec = np.array([2020.0, 2021.0])
+    data = np.arange(12, dtype=np.float32).reshape(2, 2, 3)
+
+    with Stack(str(path), mode="w") as stack:
+        stack.initialize(tdec, hdr, data=True)
+        stack.set_chunk(slice(None), slice(None), data)
+        assert isinstance(stack["data"], xr.DataArray)
+        assert stack["data"].dims == ("time", "y", "x")
+        assert stack.time_to_index(date="2021-01-01") == 1
+
+    with h5py.File(path, "r") as fid:
+        units = fid["time"].attrs["units"]
+        if isinstance(units, bytes):
+            units = units.decode("utf-8")
+        assert units == TIME_UNITS
+        assert fid["time"].dtype.kind in ("i", "u")
+        assert fid.attrs["format"] == "xarray"
+
+    with Stack(str(path)) as stack:
+        assert np.allclose(stack.tdec, tdec)
+        assert stack["data"].dims == ("time", "y", "x")
+        assert np.array_equal(stack.slice(1), data[1])
+        assert np.array_equal(stack.get_chunk(slice(0, 2), slice(1, 3)), data[:, :, 1:3])
+        assert np.array_equal(stack.timeseries(coord=(1, 2)), data[:, 1, 2])
+        assert np.array_equal(stack.mean(), data.mean(axis=0))
+        selected = stack["data"].sel(time=np.datetime64("2021-01-01"))
+        assert np.array_equal(selected.values, data[1])
+        deriv = stack["data"].differentiate("time")
+        assert deriv.dims == ("time", "y", "x")
+
+
+def test_stack_reads_legacy_nhw_hdf5_as_canonical_xarray(tmp_path):
+    path = tmp_path / "legacy_nhw.h5"
+    data = np.arange(12, dtype=np.float32).reshape(2, 2, 3)
+    with h5py.File(path, "w") as fid:
+        fid["x"] = np.array([10.0, 12.0, 14.0])
+        fid["y"] = np.array([20.0, 17.0])
+        fid["tdec"] = np.array([2020.0, 2021.0])
+        fid["data"] = data
+        fid["weights"] = data + 1
+        fid.attrs["EPSG"] = 3413
+        fid.attrs["format"] = "NHW"
+
+    with Stack(str(path)) as stack:
+        assert stack.fmt == "NHW"
+        assert stack.original_fmt == "NHW"
+        assert stack["data"].dims == ("time", "y", "x")
+        assert np.array_equal(stack["data"].values, data)
+        assert np.array_equal(stack.slice(0), data[0])
+        assert np.array_equal(stack.timeseries(coord=(1, 2)), data[:, 1, 2])
+
+
+def test_stack_reads_legacy_hwn_hdf5_as_canonical_xarray(tmp_path):
+    path = tmp_path / "legacy_hwn.h5"
+    canonical = np.arange(12, dtype=np.float32).reshape(2, 2, 3)
+    hwn = np.moveaxis(canonical, 0, -1)
+    with h5py.File(path, "w") as fid:
+        fid["x"] = np.array([10.0, 12.0, 14.0])
+        fid["y"] = np.array([20.0, 17.0])
+        fid["tdec"] = np.array([2020.0, 2021.0])
+        fid["data"] = hwn
+        fid.attrs["EPSG"] = 3413
+        fid.attrs["format"] = "HWN"
+
+    with Stack(str(path)) as stack:
+        assert stack.fmt == "NHW"
+        assert stack.original_fmt == "HWN"
+        assert stack.shape == canonical.shape
+        assert stack["data"].dims == ("time", "y", "x")
+        assert np.array_equal(stack["data"].values, canonical)
+        assert np.array_equal(stack.get_chunk(slice(None), slice(None)), canonical)
