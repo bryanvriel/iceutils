@@ -71,7 +71,7 @@ def main(args):
         mean = stack.slice(ind, key=args.key)
     else:
         try:
-            mean = stack[args.frame][()]
+            mean = stack[args.frame].values
         except KeyError:
             raise ValueError('Unsupported frame type.')
     # Make sure frame has the right shape
@@ -96,13 +96,10 @@ def main(args):
         mstack = ice.Stack(args.mfile, ds_hdr=args.mkey)
         # Load correct time array
         if args.mtdec != 'tdec':
-            mtdec = mstack[args.mtdec][()]
+            mtdec = mstack[args.mtdec].values
         else:
             mtdec = mstack.tdec
-            if mstack.fmt == 'NHW':
-                M_Nt = mstack[args.mkey].shape[0]
-            else:
-                M_Nt = mstack[args.mkey].shape[2]
+            M_Nt = mstack[args.mkey].sizes.get('time', mstack[args.mkey].shape[0])
             if M_Nt != mtdec.size:
                 mtdec = np.arange(M_Nt)
 

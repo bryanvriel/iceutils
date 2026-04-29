@@ -16,6 +16,8 @@ scipy
 matplotlib
 rasterio
 h5py
+h5netcdf
+xarray
 pyproj
 scikit-image
 tqdm
@@ -199,20 +201,20 @@ Note that the keyword argument `n` specifies the number of equally-spaced points
 
 ## Stack analysis
 
-`iceutils` also provides an implementation for raster time series, which we call a `Stack`. The key attribute of a stack is that all rasters will have the same projection system, geographic area, and image size, which will allow us to store stacks as 3D numpy arrays in memory. To store stacks on disk, the current implementation uses HDF5. The dataset layout of the HDF5 file is:
+`iceutils` also provides an implementation for raster time series, which we call a `Stack`. The key attribute of a stack is that all rasters will have the same projection system, geographic area, and image size. `Stack` uses `xarray` as its primary in-memory representation and stores new stacks as NetCDF-compatible HDF5 files. The standard dimension layout is:
 
 ```
 x           Dataset {N}
 y           Dataset {M}
-tdec        Dataset {K}
-igram       Dataset {K, M, N}
+time        Dataset {K}
+data        Dataset {K, M, N}
 weights     Dataset {K, M, N}
 ```
-The first two datasets are 1D datasets corresponding to the coordinates of the stack. The third dataset, `tdec` is a 1D dataset corresponding to the decimal years for each raster in the stack. The 3D dataset `igram` contains the actual stack (note: the name `igram` is InSAR based, so I'll be changing this to something else very soon). Finally, the 3D dataset `weights` correspond to the weights associated with each raster. Generally, I set these to be the inverse of error/uncertainty maps associated with my data (e.g., `*ex.tif` and `*ey.tif` files for the Measures GIMP data), but ostensibly these can be set to anything sensible.
+The first two datasets are 1D datasets corresponding to the coordinates of the stack. The `time` coordinate is stored using CF-style units, `seconds since 1970-01-01 00:00:00`, and is decoded by `xarray` as datetimes. The `Stack.tdec` property computes decimal years on demand for compatibility with older `iceutils` workflows. The 3D dataset `data` contains the actual stack, and `weights` corresponds to optional weights associated with each raster. Legacy HDF5 stacks with `tdec`, `igram`, `data`, `weights`, `NHW`, or `HWN` layouts are still readable and are normalized to `("time", "y", "x")` in memory.
 
 ### The `Stack` class
 
-The `Stack` class implemented in `iceutils` is for the most part a convenience interface to the underlying HDF5 file via the `h5py` Python package. For example, let's read in a stack and get a numpy array for the nearest raster image for a certain time:
+The `Stack` class implemented in `iceutils` is a light wrapper around an `xarray.Dataset`. For example, let's read in a stack and get a numpy array for the nearest raster image for a certain time:
 
 ```python
 import numpy as np
@@ -223,12 +225,15 @@ stack = ice.Stack('velocity_stack.h5')
 
 # Find the nearest time index for a decimal year of interest
 t = 2014.43
-index = np.argmin(np.abs(stack['tdec'] - t))
+index = stack.time_to_index(t)
 
 # Get numpy array for that index
-raster_array = stack['igram'][index, :, :]
+raster_array = stack['data'].isel(time=index).values
+
+# Or select by decoded time coordinate
+raster_array = stack['data'].sel(time='2014-06-01', method='nearest').values
 ```
-In the above example, we access the HDF5 datasets in the `Stack` via a key (similar to a Python dictionary). Also, when we "load" a stack, we don't actually load it into memory. Similarly, accessing an HDF5 dataset does not automatically load that dataset into memory (`h5py` behavior). However, indexing an HDF5 dataset will load the data into memory (e.g., `raster_array` is in memory).
+In the above example, we access stack variables through xarray `DataArray` objects. This exposes named-axis indexing, reductions, coordinate-aware selection, and methods such as `differentiate`.
 
 ### Extract time series at a given point
 

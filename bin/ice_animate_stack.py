@@ -69,7 +69,7 @@ def main(args):
 
     # Set up animation
     fig, ax = plt.subplots(figsize=args.figsize)
-    data = stack._datasets[args.key]
+    data = stack[args.key]
     cmap = ice.get_cmap(args.cmap)
 
     # Add ref image if using
@@ -79,12 +79,12 @@ def main(args):
 
     # Extract reference frame if index provided
     if args.rel_index is not None:
-        data_ref = data[args.rel_index]
+        data_ref = data.isel(time=args.rel_index).values
     else:
         data_ref = 0.0
 
-    im = ax.imshow(data[0] - data_ref, extent=stack.hdr.extent, cmap=cmap, clim=args.clim,
-        alpha=args.alpha)
+    im = ax.imshow(data.isel(time=0).values - data_ref, extent=stack.hdr.extent,
+        cmap=cmap, clim=args.clim, alpha=args.alpha)
 
     # Set aspect
     try:
@@ -108,7 +108,7 @@ def main(args):
 
     # Update the frame
     def animate(i):
-        im.set_data(data[i] - data_ref)
+        im.set_data(data.isel(time=i).values - data_ref)
         datestr = ice.tdec2datestr(stack.tdec[i])
         tx.set_text(args.title + ' ' + datestr)
 
@@ -116,7 +116,7 @@ def main(args):
 
     print('Generating animation and saving to', args.save)
     interval = 1000/args.fps # Convert fps to interval in milliseconds
-    anim = animation.FuncAnimation(fig, animate, interval=interval, frames=len(data), 
+    anim = animation.FuncAnimation(fig, animate, interval=interval, frames=stack.Nt, 
         repeat=True)
     anim.save(args.save, dpi=args.dpi)
 

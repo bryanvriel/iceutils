@@ -85,10 +85,13 @@ def main(args):
 
     # Manually fill in the data
     try:
-        ostack['data'][:, :, :] = stack['data'][tslice, islice, jslice]
+        data = stack['data'].isel(time=tslice, y=islice, x=jslice)
     except KeyError:
-        ostack['data'][:, :, :] = stack['igram'][tslice, islice, jslice]
-    ostack['weights'][:, :, :] = stack['weights'][tslice, islice, jslice]
+        data = stack['igram'].isel(time=tslice, y=islice, x=jslice)
+    ostack.set_chunk(slice(None), slice(None), data, key='data')
+    ostack.set_chunk(slice(None), slice(None),
+                     stack['weights'].isel(time=tslice, y=islice, x=jslice),
+                     key='weights')
 
     
 if __name__ == '__main__':
