@@ -1,4 +1,7 @@
 import os
+from pathlib import Path
+import subprocess
+import sys
 import tempfile
 
 import h5py
@@ -37,6 +40,24 @@ def _write_geotiff(path, data, transform=None, crs="EPSG:3413", nodata=None):
     return transform
 
 
+def _write_multiband_geotiff(path, data, transform=None, crs="EPSG:3413"):
+    if transform is None:
+        transform = from_origin(100.0, 200.0, 10.0, 20.0)
+    with rasterio.open(
+        path,
+        "w",
+        driver="GTiff",
+        height=data.shape[1],
+        width=data.shape[2],
+        count=data.shape[0],
+        dtype=data.dtype,
+        crs=crs,
+        transform=transform,
+    ) as dst:
+        dst.write(data)
+    return transform
+
+
 def test_read_write_round_trip_preserves_data_and_metadata(tmp_path):
     data = np.arange(12, dtype=np.float32).reshape(3, 4)
     src = tmp_path / "src.tif"
@@ -48,6 +69,7 @@ def test_read_write_round_trip_preserves_data_and_metadata(tmp_path):
     assert raster.nodataval == -9999.0
     assert raster.hdr.shape == data.shape
     assert raster.hdr.epsg == 3413
+    assert raster.hdr.nbands == 1
     assert tuple(raster.hdr.transform) == tuple(transform)
     assert raster.hdr.dtype == np.dtype("float32")
 
@@ -59,6 +81,32 @@ def test_read_write_round_trip_preserves_data_and_metadata(tmp_path):
         assert ds.nodata == -9999.0
         assert ds.crs.to_epsg() == 3413
         assert tuple(ds.transform) == tuple(transform)
+
+
+def test_rasterinfo_and_ice_info_report_raster_band_count(tmp_path):
+    data = np.stack([
+        np.full((2, 3), 1, dtype=np.float32),
+        np.full((2, 3), 2, dtype=np.float32),
+        np.full((2, 3), 3, dtype=np.float32),
+    ])
+    src = tmp_path / "multiband.tif"
+    _write_multiband_geotiff(src, data)
+
+    hdr = RasterInfo(str(src))
+    raster = Raster(str(src), band=2)
+
+    assert hdr.nbands == 3
+    assert raster.hdr.nbands == 3
+
+    script = Path(__file__).resolve().parents[1] / "bin" / "ice_info.py"
+    result = subprocess.run(
+        [sys.executable, str(script), str(src)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "Number of bands: 3" in result.stdout
 
 
 def test_projwin_and_slice_reads_update_array_and_transform(tmp_path):
