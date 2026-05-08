@@ -38,7 +38,7 @@ def main(args):
 
     # Check if requested dataset is 2D. If so, view it directly
     if stack[args.key].ndim == 2:
-        mean = stack[args.key][()]
+        mean = stack[args.key].values
     # Otherwise, compute mean
     else:
         mean = stack.mean(key=args.key)

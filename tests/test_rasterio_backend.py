@@ -1,9 +1,13 @@
 import os
+from pathlib import Path
+import subprocess
+import sys
 import tempfile
 
 import h5py
 import numpy as np
 import pytest
+import xarray as xr
 import rasterio
 from rasterio import Affine
 from rasterio.crs import CRS
@@ -14,6 +18,7 @@ from rasterio.warp import calculate_default_transform, reproject
 os.environ.setdefault("MPLCONFIGDIR", os.path.join(tempfile.gettempdir(), "iceutils-mpl"))
 
 from iceutils.raster import Raster, RasterInfo, warp, write_gdal
+from iceutils.stack import Stack, TIME_UNITS
 
 
 def _write_geotiff(path, data, transform=None, crs="EPSG:3413", nodata=None):
@@ -35,6 +40,24 @@ def _write_geotiff(path, data, transform=None, crs="EPSG:3413", nodata=None):
     return transform
 
 
+def _write_multiband_geotiff(path, data, transform=None, crs="EPSG:3413"):
+    if transform is None:
+        transform = from_origin(100.0, 200.0, 10.0, 20.0)
+    with rasterio.open(
+        path,
+        "w",
+        driver="GTiff",
+        height=data.shape[1],
+        width=data.shape[2],
+        count=data.shape[0],
+        dtype=data.dtype,
+        crs=crs,
+        transform=transform,
+    ) as dst:
+        dst.write(data)
+    return transform
+
+
 def test_read_write_round_trip_preserves_data_and_metadata(tmp_path):
     data = np.arange(12, dtype=np.float32).reshape(3, 4)
     src = tmp_path / "src.tif"
@@ -46,6 +69,7 @@ def test_read_write_round_trip_preserves_data_and_metadata(tmp_path):
     assert raster.nodataval == -9999.0
     assert raster.hdr.shape == data.shape
     assert raster.hdr.epsg == 3413
+    assert raster.hdr.nbands == 1
     assert tuple(raster.hdr.transform) == tuple(transform)
     assert raster.hdr.dtype == np.dtype("float32")
 
@@ -57,6 +81,32 @@ def test_read_write_round_trip_preserves_data_and_metadata(tmp_path):
         assert ds.nodata == -9999.0
         assert ds.crs.to_epsg() == 3413
         assert tuple(ds.transform) == tuple(transform)
+
+
+def test_rasterinfo_and_ice_info_report_raster_band_count(tmp_path):
+    data = np.stack([
+        np.full((2, 3), 1, dtype=np.float32),
+        np.full((2, 3), 2, dtype=np.float32),
+        np.full((2, 3), 3, dtype=np.float32),
+    ])
+    src = tmp_path / "multiband.tif"
+    _write_multiband_geotiff(src, data)
+
+    hdr = RasterInfo(str(src))
+    raster = Raster(str(src), band=2)
+
+    assert hdr.nbands == 3
+    assert raster.hdr.nbands == 3
+
+    script = Path(__file__).resolve().parents[1] / "bin" / "ice_info.py"
+    result = subprocess.run(
+        [sys.executable, str(script), str(src)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "Number of bands: 3" in result.stdout
 
 
 def test_projwin_and_slice_reads_update_array_and_transform(tmp_path):
@@ -192,3 +242,83 @@ def test_stack_rasterinfo_keeps_existing_hdf5_layout(tmp_path):
     assert tuple(hdr.transform) == tuple(Affine(2.0, 0.0, 10.0, 0.0, -3.0, 20.0))
     assert np.array_equal(hdr.xcoords, np.array([10.0, 12.0, 14.0]))
     assert np.array_equal(hdr.ycoords, np.array([20.0, 17.0]))
+
+
+def test_stack_writes_xarray_format_with_unix_second_time_encoding(tmp_path):
+    path = tmp_path / "stack_xarray.h5"
+    hdr = RasterInfo(
+        transform=Affine(2.0, 0.0, 10.0, 0.0, -3.0, 20.0),
+        crs=CRS.from_epsg(3413),
+        shape=(2, 3),
+    )
+    tdec = np.array([2020.0, 2021.0])
+    data = np.arange(12, dtype=np.float32).reshape(2, 2, 3)
+
+    with Stack(str(path), mode="w") as stack:
+        stack.initialize(tdec, hdr, data=True)
+        stack.set_chunk(slice(None), slice(None), data)
+        assert isinstance(stack["data"], xr.DataArray)
+        assert stack["data"].dims == ("time", "y", "x")
+        assert stack.time_to_index(date="2021-01-01") == 1
+
+    with h5py.File(path, "r") as fid:
+        units = fid["time"].attrs["units"]
+        if isinstance(units, bytes):
+            units = units.decode("utf-8")
+        assert units == TIME_UNITS
+        assert fid["time"].dtype.kind in ("i", "u")
+        assert fid.attrs["format"] == "xarray"
+
+    with Stack(str(path)) as stack:
+        assert np.allclose(stack.tdec, tdec)
+        assert stack["data"].dims == ("time", "y", "x")
+        assert np.array_equal(stack.slice(1), data[1])
+        assert np.array_equal(stack.get_chunk(slice(0, 2), slice(1, 3)), data[:, :, 1:3])
+        assert np.array_equal(stack.timeseries(coord=(1, 2)), data[:, 1, 2])
+        assert np.array_equal(stack.mean(), data.mean(axis=0))
+        selected = stack["data"].sel(time=np.datetime64("2021-01-01"))
+        assert np.array_equal(selected.values, data[1])
+        deriv = stack["data"].differentiate("time")
+        assert deriv.dims == ("time", "y", "x")
+
+
+def test_stack_reads_legacy_nhw_hdf5_as_canonical_xarray(tmp_path):
+    path = tmp_path / "legacy_nhw.h5"
+    data = np.arange(12, dtype=np.float32).reshape(2, 2, 3)
+    with h5py.File(path, "w") as fid:
+        fid["x"] = np.array([10.0, 12.0, 14.0])
+        fid["y"] = np.array([20.0, 17.0])
+        fid["tdec"] = np.array([2020.0, 2021.0])
+        fid["data"] = data
+        fid["weights"] = data + 1
+        fid.attrs["EPSG"] = 3413
+        fid.attrs["format"] = "NHW"
+
+    with Stack(str(path)) as stack:
+        assert stack.fmt == "NHW"
+        assert stack.original_fmt == "NHW"
+        assert stack["data"].dims == ("time", "y", "x")
+        assert np.array_equal(stack["data"].values, data)
+        assert np.array_equal(stack.slice(0), data[0])
+        assert np.array_equal(stack.timeseries(coord=(1, 2)), data[:, 1, 2])
+
+
+def test_stack_reads_legacy_hwn_hdf5_as_canonical_xarray(tmp_path):
+    path = tmp_path / "legacy_hwn.h5"
+    canonical = np.arange(12, dtype=np.float32).reshape(2, 2, 3)
+    hwn = np.moveaxis(canonical, 0, -1)
+    with h5py.File(path, "w") as fid:
+        fid["x"] = np.array([10.0, 12.0, 14.0])
+        fid["y"] = np.array([20.0, 17.0])
+        fid["tdec"] = np.array([2020.0, 2021.0])
+        fid["data"] = hwn
+        fid.attrs["EPSG"] = 3413
+        fid.attrs["format"] = "HWN"
+
+    with Stack(str(path)) as stack:
+        assert stack.fmt == "NHW"
+        assert stack.original_fmt == "HWN"
+        assert stack.shape == canonical.shape
+        assert stack["data"].dims == ("time", "y", "x")
+        assert np.array_equal(stack["data"].values, canonical)
+        assert np.array_equal(stack.get_chunk(slice(None), slice(None)), canonical)

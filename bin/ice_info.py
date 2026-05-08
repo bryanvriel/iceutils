@@ -33,6 +33,9 @@ def main(args):
 
     print('Image shape: (%d, %d)' % (hdr.ny, hdr.nx))
 
+    if getattr(hdr, 'nbands', None) is not None:
+        print('Number of bands: %d' % hdr.nbands)
+
     print('Geographic extent: %f %f %f %f' % tuple(hdr.extent))
 
     print('Geographic spacing: (dy = %f, dx = %f)' % (hdr.dy, hdr.dx))

@@ -52,7 +52,7 @@ def inversion(stack, userfile, outdir, cleaned_stack=None,
 
     # Get list of chunks
     try:
-        _, chunk_ny, chunk_nx = stack['chunk_shape'][()]
+        _, chunk_ny, chunk_nx = stack['chunk_shape'].values
     except KeyError:
         # Fall back to default
         chunk_ny = chunk_nx = 128

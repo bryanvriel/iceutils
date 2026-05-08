@@ -1,283 +1,559 @@
 #-*- coding: utf-8 -*-
 
 from typing import List, Union
-import warnings
-import numpy as np
 import copy
+import datetime
+import os
+import warnings
+
+import h5netcdf
 import h5py
+import numpy as np
+import xarray as xr
 
 from .raster import Raster, RasterInfo
-from .timeutils import datestr2tdec
+
+
+TIME_UNITS = 'seconds since 1970-01-01 00:00:00'
+TIME_CALENDAR = 'proleptic_gregorian'
+EPOCH = np.datetime64('1970-01-01T00:00:00', 'ns')
+
+
+def _is_datetime_like(value):
+    return isinstance(value, (datetime.datetime, datetime.date, np.datetime64, str))
+
+
+def _as_datetime64_scalar(value):
+    if isinstance(value, np.datetime64):
+        return value.astype('datetime64[ns]')
+    if isinstance(value, datetime.datetime):
+        return np.datetime64(value.replace(tzinfo=None), 'ns')
+    if isinstance(value, datetime.date):
+        return np.datetime64(datetime.datetime.combine(value, datetime.time()), 'ns')
+    if isinstance(value, str):
+        return np.datetime64(value, 'ns')
+    raise TypeError('Input is not datetime-like.')
+
+
+def _tdec_to_datetime64(tdec):
+    """
+    Convert decimal years to timezone-naive datetime64 values.
+    """
+    arr = np.asarray(tdec, dtype=float)
+    flat = arr.ravel()
+    out = np.empty(flat.size, dtype='datetime64[ns]')
+    for index, value in enumerate(flat):
+        year = int(np.floor(value))
+        start = np.datetime64('%04d-01-01T00:00:00' % year, 'ns')
+        stop = np.datetime64('%04d-01-01T00:00:00' % (year + 1), 'ns')
+        span = (stop - start) / np.timedelta64(1, 'ns')
+        delta = np.timedelta64(int(round((value - year) * span)), 'ns')
+        out[index] = start + delta
+    return out.reshape(arr.shape)
+
+
+def _datetime64_to_tdec(time):
+    """
+    Convert datetime64 values to decimal years.
+    """
+    arr = np.asarray(time)
+    if not np.issubdtype(arr.dtype, np.datetime64):
+        arr = EPOCH + np.rint(arr.astype(float) * 1.0e9).astype('timedelta64[ns]')
+    arr = arr.astype('datetime64[ns]')
+    year_coord = arr.astype('datetime64[Y]')
+    years = year_coord.astype(int) + 1970
+    starts = year_coord.astype('datetime64[ns]')
+    stops = (year_coord + 1).astype('datetime64[ns]')
+    elapsed = (arr - starts) / np.timedelta64(1, 's')
+    span = (stops - starts) / np.timedelta64(1, 's')
+    return years.astype(float) + elapsed / span
+
+
+def _time_values_to_datetime64(values, units=None):
+    """
+    Normalize supported time encodings to datetime64.
+    """
+    arr = np.asarray(values)
+    if np.issubdtype(arr.dtype, np.datetime64):
+        return arr.astype('datetime64[ns]')
+    if units is not None and units.startswith('seconds since 1970-01-01'):
+        return EPOCH + np.rint(arr.astype(float) * 1.0e9).astype('timedelta64[ns]')
+    return _tdec_to_datetime64(arr)
+
+
+def _needs_float_time_encoding(times):
+    seconds = (np.asarray(times).astype('datetime64[ns]') - EPOCH) / np.timedelta64(1, 's')
+    return not np.allclose(seconds, np.rint(seconds))
+
+
+def _time_encoding(times):
+    dtype = 'float64' if _needs_float_time_encoding(times) else 'int64'
+    return {'units': TIME_UNITS, 'calendar': TIME_CALENDAR, 'dtype': dtype}
+
+
+def _dataset_values(obj):
+    return obj.values if hasattr(obj, 'values') else np.asarray(obj)
+
 
 class Stack:
     """
-    Class that encapsulates standard HDF5 stack file.
+    Xarray-backed stack for raster time series.
     """
 
     def __init__(self, filename, mode='r', fmt='NHW',
                  init_stack=None, init_tdec=None, init_rasterinfo=None,
                  init_names=None, init_data=False, ds_hdr=None, time_key='tdec'):
-        """Reads Stack from an existing HDF5 file or creates a new Stack.
+        """Reads Stack from an existing file or creates a new Stack.
 
-        To create a new Stack, set mode to 'x' and specify:
-        - init_stack
-        - init_rasterinfo + init_tdec + (optionally) init_names
-
-        Parameters
-        ----------
-        filename: str
-            Path to the HDF5 file to read from/write to.
-        mode: 'r', 'r+', 'w', 'a', 'x'
-            Mode to open the file in. Must be 'x' to create a new Stack if it
-            does not exist, or 'w' to overwrite an existing Stack file.
-        init_stack: ice.Stack, optional
-            Reference Stack to initialize RasterInfo and tdec from.
-        init_tdec: np.ndarray, optional
-            Array of decimal years to initialize Stack with. Must be provided
-            if creating a new Stack and `init_stack` is not provided.
-        init_rasterinfo: optional ice.RasterInfo
-            RasterInfo to initialize Stack with. Must be provided if creating a
-            new Stack and `init_stack` is not provided.
-        init_names: np.ndarray or List of strings, optional
-            List of names corresponding to each Raster in a Stack.
-        init_data: bool
-            Whether to create a default empty dataset.
-        time_key: str, optional
-            Key for time array dataset. Default: 'tdec'
+        New files are NetCDF-compatible HDF5 files with xarray dimensions
+        ``time``, ``y``, and ``x``. Legacy HDF5 stacks are normalized into the
+        same in-memory dimension order.
         """
+        assert mode in ('r', 'r+', 'w', 'a', 'x'), 'Unsupported HDF5 file open mode'
+        self.filename = filename
+        self.mode = mode
+        self.original_fmt = fmt
+        self.fmt = 'NHW'
+        self.hdr = None
+        self.ds = xr.Dataset()
         self.fid = None
         self._datasets = {}
+        self._dirty = False
+        self._legacy = False
+        self._time_key = time_key
+        self._ds_hdr = ds_hdr
 
-        # Store the mode
-        assert mode in ('r', 'r+', 'w', 'a', 'x'), 'Unsupported HDF5 file open mode'
-        self.mode = mode
-
-        # Open HDF5 file 
-        self.fid = h5py.File(filename, self.mode)
-
-        # If file opened in read mode, save RasterInfo and time information
-        if self.mode in ('r', 'r+'):
-
-            self.hdr = RasterInfo(stackfile=filename, ds=ds_hdr)
-
-            # Read time array
-            try:
-                self.tdec = self.fid[time_key][()]
-            except KeyError:
-                try:
-                    self.tdec = self.fid['t'][()]
-                    warnings.warn('Using dataset "t" for time array.', category=UserWarning)
-                except KeyError:
-                    self.tdec = np.linspace(0, 1, 2)
-                    warnings.warn('No time vector found.', category=UserWarning)
-
-            # Also try to read format attribute
-            try:
-                self.fmt = self.fid.attrs['format']
-            except KeyError:
-                self.fmt = fmt
-
-            # Initialize datasets dictionary
-            for key, value in self.fid.items():
-                if isinstance(value, h5py.Dataset):
-                    self._datasets[key] = value
-                elif isinstance(value, h5py.Group):
-                    for dkey, dvalue in value.items():
-                        self._datasets['%s/%s' % (key, dkey)] = dvalue
-
-        # Otherwise, initialize from another stack or from separate time and RasterInfo
+        if mode in ('r', 'r+') or (mode == 'a' and os.path.exists(filename)):
+            self._open_existing(ds_hdr=ds_hdr, time_key=time_key)
+            if mode in ('r+', 'a') and not self._legacy:
+                self.fid = h5netcdf.File(filename, 'a')
         else:
-
-            # If another stack is provided, copy metadata and save into Datasets
+            self._create_empty_file(mode)
             if isinstance(init_stack, Stack):
-                self.hdr = init_stack.hdr
-                self.tdec = init_stack.tdec
-                if 'names' in init_stack._datasets.keys():
+                self.initialize(init_stack.tdec, init_stack.hdr, names=init_names,
+                                data=init_data, fmt=fmt)
+                if init_names is None and 'names' in init_stack.ds:
                     self.names = init_stack.names
-
-            # Otherwise, set from time array and RasterInfo
             elif init_tdec is not None and init_rasterinfo is not None:
-                self.hdr = init_rasterinfo
-                self.tdec = init_tdec
-
-            else:
+                self.initialize(init_tdec, init_rasterinfo, names=init_names,
+                                data=init_data, fmt=fmt)
+            elif any(value is not None for value in (init_stack, init_tdec, init_rasterinfo)):
                 raise ValueError('Must supply init_stack or init_tdec+init_rasterinfo.')
 
-            # Set metadata datasets and attributes
-            if init_names is not None:
-                self.names = init_names
-            self.fid['x'] = self.hdr.xcoords
-            self.fid['y'] = self.hdr.ycoords
-            self.fid['tdec'] = self.tdec
-            self.fid.attrs['format'] = fmt; self.fmt = fmt
-            if self.hdr.epsg is not None:
-                self.fid.attrs['EPSG'] = self.hdr.epsg
+        if self.Nt is not None:
+            self._nan_tseries = np.full((self.Nt,), np.nan, dtype='f')
+        else:
+            self._nan_tseries = None
 
-        # Initialize a NaN time series
-        self._nan_tseries = np.full(self.tdec.shape, np.nan, dtype='f')
+    def _create_empty_file(self, mode):
+        h5_mode = 'w' if mode == 'w' else mode
+        self.fid = h5netcdf.File(self.filename, h5_mode)
 
-        # Optionally create default "data" dataset
-        if init_data:
-            self.init_default_datasets()
+    def _open_existing(self, ds_hdr=None, time_key='tdec'):
+        try:
+            ds = xr.open_dataset(self.filename, engine='h5netcdf', decode_times=True,
+                                 phony_dims='sort')
+            if {'time', 'y', 'x'}.issubset(ds.sizes):
+                self.ds = ds
+                self.original_fmt = ds.attrs.get('original_format', ds.attrs.get('format', 'NHW'))
+                self.fmt = 'NHW'
+                self.hdr = self._rasterinfo_from_dataset(ds)
+                self._update_dataset_cache()
+                return
+            ds.close()
+        except Exception:
+            pass
 
-        return
+        self._legacy = True
+        self._load_legacy_hdf5(ds_hdr=ds_hdr, time_key=time_key)
+
+    def _load_legacy_hdf5(self, ds_hdr=None, time_key='tdec'):
+        data_vars = {}
+        with h5py.File(self.filename, 'r') as fid:
+            self.original_fmt = fid.attrs.get('format', 'NHW')
+            if isinstance(self.original_fmt, bytes):
+                self.original_fmt = self.original_fmt.decode('utf-8')
+
+            x, y = self._read_legacy_xy(fid, ds_hdr)
+            time = self._read_legacy_time(fid, time_key)
+            coords = {'time': ('time', time), 'y': ('y', y), 'x': ('x', x)}
+
+            for key, value in self._iter_hdf5_datasets(fid):
+                if key in ('x', 'X', 'y', 'Y', time_key, 'tdec', 't', 'time'):
+                    continue
+                if key == 'names':
+                    data_vars[key] = ('time', self._decode_names(value[()]))
+                    continue
+                if key == 'chunk_shape':
+                    data_vars[key] = ('chunk_dim', value[()])
+                    continue
+
+                arr = value[()]
+                if arr.ndim == 3:
+                    if self.original_fmt == 'HWN' or arr.shape == (y.size, x.size, time.size):
+                        arr = np.moveaxis(arr, -1, 0)
+                    data_vars[key] = (('time', 'y', 'x'), arr)
+                elif arr.ndim == 2 and arr.shape == (y.size, x.size):
+                    data_vars[key] = (('y', 'x'), arr)
+                elif arr.ndim == 1 and arr.shape[0] == time.size:
+                    data_vars[key] = ('time', arr)
+                elif arr.ndim == 1:
+                    dim = '%s_dim' % key.replace('/', '_')
+                    data_vars[key] = (dim, arr)
+                else:
+                    dims = tuple('%s_dim_%d' % (key.replace('/', '_'), i) for i in range(arr.ndim))
+                    data_vars[key] = (dims, arr)
+
+            attrs = dict(fid.attrs)
+            attrs['original_format'] = self.original_fmt
+            attrs['format'] = 'xarray'
+            attrs.setdefault('time_units', TIME_UNITS)
+            if 'EPSG' in fid.attrs:
+                attrs['EPSG'] = int(fid.attrs['EPSG'])
+
+        self.ds = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
+        self.hdr = self._rasterinfo_from_dataset(self.ds)
+        self.fmt = 'NHW'
+        self._update_dataset_cache()
+
+    @staticmethod
+    def _iter_hdf5_datasets(group, prefix=''):
+        for key, value in group.items():
+            name = '%s/%s' % (prefix, key) if prefix else key
+            if isinstance(value, h5py.Dataset):
+                yield name, value
+            elif isinstance(value, h5py.Group):
+                yield from Stack._iter_hdf5_datasets(value, name)
+
+    @staticmethod
+    def _decode_names(values):
+        arr = np.asarray(values)
+        if arr.ndim == 2 and arr.shape[1] == 1:
+            arr = arr[:, 0]
+        names = []
+        for value in arr:
+            if isinstance(value, bytes):
+                names.append(value.decode('utf-8'))
+            else:
+                names.append(str(value))
+        return np.asarray(names)
+
+    @staticmethod
+    def _read_legacy_xy(fid, ds_hdr=None):
+        try:
+            x = fid['x'][()].squeeze()
+            y = fid['y'][()].squeeze()
+        except KeyError:
+            try:
+                x = fid['X'][()]
+                y = fid['Y'][()]
+            except KeyError:
+                if ds_hdr is None:
+                    ds_hdr = Stack._guess_legacy_data_key(fid)
+                shape = fid[ds_hdr].shape
+                fmt = fid.attrs.get('format', 'NHW')
+                if isinstance(fmt, bytes):
+                    fmt = fmt.decode('utf-8')
+                if fmt == 'HWN' and len(shape) >= 3:
+                    ny, nx = shape[0], shape[1]
+                else:
+                    ny, nx = shape[-2:]
+                x = np.arange(nx)
+                y = np.arange(ny)
+
+        if x.ndim == 2:
+            x = x[0, :]
+        if y.ndim == 2:
+            y = y[:, 0]
+        return np.asarray(x), np.asarray(y)
+
+    @staticmethod
+    def _guess_legacy_data_key(fid):
+        for key in ('data', 'igram', 'weights'):
+            if key in fid and fid[key].ndim >= 2:
+                return key
+        for key, value in Stack._iter_hdf5_datasets(fid):
+            if value.ndim >= 2:
+                return key
+        raise ValueError('Could not infer raster dimensions from stack file.')
+
+    def _read_legacy_time(self, fid, time_key):
+        for key in (time_key, 'time', 'tdec', 't'):
+            if key in fid:
+                units = fid[key].attrs.get('units')
+                if isinstance(units, bytes):
+                    units = units.decode('utf-8')
+                if key == 'time':
+                    return _time_values_to_datetime64(fid[key][()], units=units)
+                if units is not None and units.startswith('seconds since 1970-01-01'):
+                    return _time_values_to_datetime64(fid[key][()], units=units)
+                return _tdec_to_datetime64(fid[key][()])
+
+        data_key = self._ds_hdr or Stack._guess_legacy_data_key(fid)
+        nt = fid[data_key].shape[0] if self.original_fmt != 'HWN' else fid[data_key].shape[-1]
+        warnings.warn('No time vector found. Using Unix epoch seconds.', category=UserWarning)
+        return EPOCH + np.arange(nt).astype('timedelta64[s]')
+
+    @staticmethod
+    def _rasterinfo_from_dataset(ds):
+        x = np.asarray(ds['x'].values)
+        y = np.asarray(ds['y'].values)
+        epsg = ds.attrs.get('EPSG')
+        if epsg is not None:
+            epsg = int(epsg)
+        return RasterInfo(X=np.meshgrid(x, y)[0], Y=np.meshgrid(x, y)[1], epsg=epsg)
+
+    def _update_dataset_cache(self):
+        self._datasets = {key: self.ds[key] for key in self.ds.variables}
+
+    def _refresh_dataset_if_dirty(self):
+        if not self._dirty:
+            return
+        if self._legacy:
+            self._load_legacy_hdf5(ds_hdr=self._ds_hdr, time_key=self._time_key)
+        else:
+            self.ds.close()
+            self.ds = xr.open_dataset(self.filename, engine='h5netcdf', decode_times=True)
+            self._update_dataset_cache()
+        self._dirty = False
+
+    def _require_initialized(self):
+        if self.hdr is None or 'time' not in self.ds.coords:
+            raise ValueError('Stack has not been initialized.')
+
+    def _require_writable(self):
+        if self.mode == 'r':
+            raise OSError('Stack opened read-only.')
+        if self._legacy:
+            raise OSError('Legacy HDF5 stacks are read-only; write a new xarray-format stack.')
+        if self.fid is None:
+            self.fid = h5netcdf.File(self.filename, 'a')
+
+    def _ensure_dimension(self, name, size):
+        if name not in self.fid.dimensions:
+            self.fid.dimensions[name] = int(size)
+
+    def initialize(self, tdec, hdr, data=False, weights=False,
+                   chunks=(1, 128, 128), names=None, fmt='NHW'):
+        """
+        Initialize a new xarray/NetCDF-compatible stack file.
+        """
+        if self.fid is not None:
+            self.fid.close()
+
+        times = _tdec_to_datetime64(tdec)
+        attrs = {'format': 'xarray', 'original_format': fmt, 'time_units': TIME_UNITS}
+        if hdr.epsg is not None:
+            attrs['EPSG'] = int(hdr.epsg)
+        ds = xr.Dataset(
+            coords={
+                'time': ('time', times),
+                'y': ('y', hdr.ycoords),
+                'x': ('x', hdr.xcoords),
+            },
+            attrs=attrs,
+        )
+        ds.to_netcdf(
+            self.filename,
+            engine='h5netcdf',
+            encoding={'time': _time_encoding(times)},
+        )
+        ds.close()
+        with h5py.File(self.filename, 'r+') as fid:
+            fid['time'].attrs['units'] = TIME_UNITS
+            fid['time'].attrs['calendar'] = TIME_CALENDAR
+
+        self.fid = h5netcdf.File(self.filename, 'a')
+        self.ds = xr.open_dataset(self.filename, engine='h5netcdf', decode_times=True)
+        self.hdr = hdr
+        self.original_fmt = fmt
+        self.fmt = 'NHW'
+        self._legacy = False
+        self._dirty = False
+        self._update_dataset_cache()
+
+        if names is not None:
+            self.names = names
+        if data:
+            self.init_default_datasets(weights=weights, chunks=chunks)
 
     def init_default_datasets(self, weights=False, chunks=(1, 128, 128)):
         """
-        Initialize default datasets 'data' and (optionally) 'weights'.
+        Initialize default datasets 'data' and optionally 'weights'.
         """
-        # Create datasets for stack data
-        if self.fmt == 'NHW':
-            shape = (self.Nt, self.Ny, self.Nx)
-        elif self.fmt == 'HWN':
-            shape = (self.Ny, self.Nx, self.Nt)
+        self._require_initialized()
+        shape = (self.Nt, self.Ny, self.Nx)
         self.create_dataset('data', shape, dtype='f', chunks=chunks)
-
-        # Optional weights dataset
         if weights:
             self.create_dataset('weights', shape, dtype='f', chunks=chunks)
-    
+
     def create_dataset(self, name, shape, dtype='f', chunks=None, **kwargs):
         """
-        Create an HDF5 dataset for data.
+        Create a NetCDF-compatible dataset.
         """
-        # Create the dataset
-        self._datasets[name] = self.fid.create_dataset(
-            name, shape, dtype, chunks=chunks, **kwargs
-        )
-        # Check if we need to save chunk shape
-        if chunks is not None and 'chunk_shape' not in self.fid.keys() and len(chunks) == 3:
-            self.fid['chunk_shape'] = list(chunks)
+        self._require_initialized()
+        self._require_writable()
+        if name in self.ds.variables or name in self.fid.variables:
+            raise ValueError('Dataset %s already exists' % name)
 
-        # Return reference to dataset
-        return self._datasets[name]
+        data = kwargs.pop('data', None)
+        fillvalue = kwargs.pop('fillvalue', None)
+        dims = self._dims_for_shape(shape, name)
+        chunks = self._normalize_chunks(chunks, shape)
+        variable = self.fid.create_variable(
+            name, dims, dtype=np.dtype(dtype), data=data, fillvalue=fillvalue,
+            chunks=chunks, **kwargs
+        )
+
+        if chunks is not None and len(chunks) == 3 and 'chunk_shape' not in self.fid.variables:
+            self._ensure_dimension('chunk_dim', 3)
+            self.fid.create_variable('chunk_shape', ('chunk_dim',), dtype='i8', data=np.asarray(chunks))
+
+        self.fid.flush()
+        self._dirty = True
+        self._refresh_dataset_if_dirty()
+        return variable
+
+    def _dims_for_shape(self, shape, name):
+        shape = tuple(shape)
+        if shape == (self.Nt, self.Ny, self.Nx):
+            return ('time', 'y', 'x')
+        if shape == (self.Ny, self.Nx):
+            return ('y', 'x')
+        if shape == (self.Nt,):
+            return ('time',)
+        if shape == (self.Ny,):
+            return ('y',)
+        if shape == (self.Nx,):
+            return ('x',)
+        dims = []
+        for index, size in enumerate(shape):
+            dim = '%s_dim_%d' % (name.replace('/', '_'), index)
+            self._ensure_dimension(dim, size)
+            dims.append(dim)
+        return tuple(dims)
+
+    @staticmethod
+    def _normalize_chunks(chunks, shape):
+        if chunks is None:
+            return None
+        if len(chunks) != len(shape):
+            return chunks
+        return tuple(min(int(chunk), int(size)) for chunk, size in zip(chunks, shape))
 
     def __getitem__(self, name):
         """
-        Provides access to underlying HDF5 dataset.
+        Return an xarray DataArray.
         """
-        return self._datasets[name]
+        self._refresh_dataset_if_dirty()
+        return self.ds[name]
 
     def __setitem__(self, name, value):
         """
         Creates a new dataset.
         """
-        # Make sure dataset doesn't already exist
-        if name in self._datasets.keys():
-            raise ValueError('Dataset %s already exists' % name)
-
-        # Create dataset automatically
         assert isinstance(value, np.ndarray), 'Must input NumPy array to set data.'
         self.create_dataset(name, value.shape, dtype=value.dtype, data=value)
-
-        return
-
-    def slice(self, index, key='data', as_raster=False):
-        """
-        Extract Stack 2d slice at given time index.
-        """
-        # Extract the data slice
-        if self.fmt == 'NHW':
-            data = self._datasets[key][index, :, :].squeeze()
-        elif self.fmt == 'HWN':
-            data = self._datasets[key][:, :, index].squeeze()
-
-        # Optionally wrap as a raster
-        if as_raster:
-            return Raster(data=data, hdr=copy.deepcopy(self.hdr))
-        else:
-            return data
-
-    def set_slice(self, index, data, key='data'):
-        """
-        Set Stack 2d slice at given time index.
-        """
-        if self.fmt == 'NHW':
-            self._datasets[key][index, :, :] = data
-        elif self.fmt == 'HWN':
-            self._datasets[key][:, :, index] = data
 
     @property
     def names(self):
         """
         Get the names of the rasters in the Stack.
         """
-        ascii_names = self.fid['names']
-        names = [n[0].decode('utf-8') for n in ascii_names]
-        return np.array(names)
+        if 'names' not in self.ds:
+            raise KeyError('names')
+        return np.asarray(self.ds['names'].values).astype(str)
 
     @names.setter
     def names(self, names: Union[np.ndarray, List[str]]):
         """
         Set the name of each Raster in a Stack for reference.
-
-        Args:
-            names: List or np.ndarray of names for each raster in Stack.
         """
-        ascii_names = [n.encode('ascii', 'ignore') for n in names]
+        self._require_writable()
+        self._require_initialized()
+        values = np.asarray(names, dtype=str)
+        if values.size != self.Nt:
+            raise ValueError('names must have one value per time step.')
+        if 'names' in self.fid.variables:
+            del self.fid.variables['names']
+        self.fid.create_variable('names', ('time',), dtype=str, data=values)
+        self.fid.flush()
+        self._dirty = True
 
-        # hdf5 requires you to specify the length of the strings being saved,
-        # use the longest name as reference so that no name is clipped.
-        max_str_len = len(max(names, key=len))
-        self.fid.create_dataset(
-            'names',
-            (len(ascii_names), 1),
-            f'S{max_str_len}',
-            ascii_names
-        )
+    def slice(self, index, key='data', as_raster=False, as_xarray=False):
+        """
+        Extract Stack 2D slice at given time index.
+        """
+        data = self[key]
+        if 'time' in data.dims:
+            data = data.isel(time=index)
+        if as_xarray:
+            return data
+        values = np.asarray(data.values).squeeze()
+        if as_raster:
+            return Raster(data=values, hdr=copy.deepcopy(self.hdr))
+        return values
 
-    def get_chunk(self, slice_y, slice_x, key='data'):
+    def set_slice(self, index, data, key='data'):
         """
-        Get a 3d chunk of data defined by 2d slice objects.
+        Set Stack 2D slice at given time index.
         """
-        if self.fmt == 'NHW':
-            return self._datasets[key][:, slice_y, slice_x]
-        elif self.fmt == 'HWN':
-            return self._datasets[key][slice_y, slice_x, :]
+        self._require_writable()
+        values = _dataset_values(data)
+        self.fid.variables[key][index, :, :] = values
+        self.fid.flush()
+        self._dirty = True
+
+    def get_chunk(self, slice_y, slice_x, key='data', as_xarray=False):
+        """
+        Get a 3D chunk of data defined by 2D slice objects.
+        """
+        data = self[key]
+        indexers = {}
+        if 'y' in data.dims:
+            indexers['y'] = slice_y
+        if 'x' in data.dims:
+            indexers['x'] = slice_x
+        data = data.isel(**indexers) if indexers else data
+        if as_xarray:
+            return data
+        return np.asarray(data.values)
 
     def set_chunk(self, slice_y, slice_x, data, key='data'):
         """
-        Set a 3d chunk of data defined by 2d slice objects.
+        Set a 3D chunk of data defined by 2D slice objects.
         """
-        if self.fmt == 'NHW':
-            self._datasets[key][:, slice_y, slice_x] = data
-        elif self.fmt == 'HWN':
-            self._datasets[key][slice_y, slice_x, :] = data
+        self._require_writable()
+        values = _dataset_values(data)
+        self.fid.variables[key][:, slice_y, slice_x] = values
+        self.fid.flush()
+        self._dirty = True
 
-    def mean(self, key='data'):
+    def mean(self, key='data', as_xarray=False):
         """
         Compute mean along time dimension.
         """
-        if self.fmt == 'NHW':
-            return np.nanmean(self._datasets[key], axis=0)
-        elif self.fmt == 'HWN':
-            return np.nanmean(self._datasets[key], axis=2)
+        data = self[key].mean(dim='time', skipna=True)
+        return data if as_xarray else np.asarray(data.values)
 
-    def median(self, key='data'):
+    def median(self, key='data', as_xarray=False):
         """
-        Compute mean along time dimension.
+        Compute median along time dimension.
         """
-        if self.fmt == 'NHW':
-            return np.nanmedian(self._datasets[key], axis=0)
-        elif self.fmt == 'HWN':
-            return np.nanmedian(self._datasets[key], axis=2)
+        data = self[key].median(dim='time', skipna=True)
+        return data if as_xarray else np.asarray(data.values)
 
-    def std(self, key='data'):
+    def std(self, key='data', as_xarray=False):
         """
         Compute standard deviation along time dimension.
         """
-        if self.fmt == 'NHW':
-            return np.nanstd(self._datasets[key], axis=0)
-        elif self.fmt == 'HWN':
-            return np.nanstd(self._datasets[key], axis=2)
+        data = self[key].std(dim='time', skipna=True)
+        return data if as_xarray else np.asarray(data.values)
 
-    def timeseries(self, xy=None, coord=None, key='data', win_size=1):
+    def timeseries(self, xy=None, coord=None, key='data', win_size=1, as_xarray=False):
         """
-        Extract time series at a given spatial coordinate. Optionally extract a window of
-        time series and average spatially. If requested coordinate is outside of stack
-        bounds, NaN array is returned.
+        Extract time series at a coordinate, optionally averaging a spatial window.
         """
-        # Get the image coordinate if not provided
         if xy is not None and coord is None:
             x, y = xy
             row, col = self.hdr.xy_to_imagecoord(x, y)
@@ -286,7 +562,6 @@ class Stack:
         else:
             raise ValueError('Must pass in geographic or image coordinate.')
 
-        # Check bounds. Warn user and return NaN if outside of bounds
         half_win = win_size // 2
         if row >= (self.Ny - half_win) or row < half_win:
             warnings.warn('Requested point outside of stack bounds. Returning NaN.',
@@ -297,116 +572,106 @@ class Stack:
                           category=UserWarning)
             return self._nan_tseries.copy()
 
-        # Spatial slice
         if win_size > 1:
-            islice = slice(row - half_win, row + half_win + 1)
-            jslice = slice(col - half_win, col + half_win + 1)
+            data = self[key].isel(
+                y=slice(row - half_win, row + half_win + 1),
+                x=slice(col - half_win, col + half_win + 1),
+            ).mean(dim=('y', 'x'), skipna=True)
         else:
-            islice, jslice = row, col
+            data = self[key].isel(y=row, x=col)
 
-        # Extract the data
-        if self.fmt == 'NHW':
-            data = self._datasets[key][:, islice, jslice]
-            if win_size > 1:
-                data = np.nanmean(data, axis=(1, 2))
-        elif self.fmt == 'HWN':
-            data = self._datasets[key][islice, jslice, :]
-            if win_size > 1:
-                data = np.nanmean(data, axis=(0, 1))
-
-        # Done
-        return data
+        return data if as_xarray else np.asarray(data.values)
 
     def resample(self, ref_hdr, output, key='data', dtype='f', order=3, chunks=None):
         """
-        Resample dataset from one coordinate system to another provided by a
-        RasterInfo object.
+        Resample dataset from one coordinate system to another RasterInfo object.
         """
         from tqdm import tqdm
         from .raster import interpolate_array
 
-        # Check if dataset exists to clean it
-        if not key in self._datasets.keys():
+        if key not in self.ds:
             print('Warning: dataset %s not in stack' % key)
             return
-        
-        # Initialize dataset in output stack
-        Ny, Nx = ref_hdr.shape
-        if self.fmt == 'NHW':
-            shape = (self.Nt, Ny, Nx)
-        elif self.fmt == 'HWN':
-            shape = (Ny, Nx, self.Nt)
-        output.create_dataset(key, shape, dtype=dtype, chunks=chunks)
 
-        # Loop over slices and interpolate
+        output.create_dataset(key, (self.Nt, ref_hdr.shape[0], ref_hdr.shape[1]),
+                              dtype=dtype, chunks=chunks)
         for k in tqdm(range(self.Nt)):
             d = self.slice(k, key=key)
             d_interp = interpolate_array(d, self.hdr, None, None,
                                          order=order, ref_hdr=ref_hdr)
             output.set_slice(k, d_interp, key=key)
 
-        # Done
-        return
+    def time_to_index(self, t=None, date=None):
+        """
+        Convert decimal year or datetime-like value to nearest time index.
+        """
+        if t is None and date is None:
+            raise ValueError('Must provide t or date.')
+        value = date if date is not None else t
+        if _is_datetime_like(value):
+            target = _as_datetime64_scalar(value)
+            times = np.asarray(self.ds['time'].values).astype('datetime64[ns]')
+            delta = np.abs((times - target) / np.timedelta64(1, 'ns'))
+            return int(np.argmin(delta))
+        return int(np.argmin(np.abs(self.tdec - value)))
 
-    def time_to_index(self, t, date=None):
+    def close(self):
         """
-        Convenience function to convert decimal year (or datetime) to a time index using
-        nearest neighbor.
+        Close open file handles.
         """
-        if t is None and date is not None:
-            t = datestr2tdec(pydtime=date)
-        return np.argmin(np.abs(self.tdec - t))
+        if self.ds is not None:
+            self.ds.close()
+        if self.fid is not None:
+            self.fid.close()
+            self.fid = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_args):
+        self.close()
+
+    @property
+    def tdec(self):
+        """
+        Decimal years computed from the xarray time coordinate.
+        """
+        if 'time' not in self.ds.coords:
+            return None
+        return _datetime64_to_tdec(self.ds['time'].values)
 
     @property
     def dt(self):
         """
-        Return mean sampling interval.
+        Return mean sampling interval in decimal years.
         """
         return np.mean(np.diff(self.tdec))
 
     @property
     def Nt(self):
-        if self.tdec is not None:
-            return self.tdec.size
-        else:
-            return None
+        return self.ds.sizes.get('time') if self.ds is not None else None
 
     @property
     def Ny(self):
-        if self.hdr is not None:
-            return self.hdr.shape[0]
-        else:
-            return None
+        return self.hdr.shape[0] if self.hdr is not None else None
 
     @property
     def Nx(self):
-        if self.hdr is not None:
-            return self.hdr.shape[1]
-        else:
-            return None
+        return self.hdr.shape[1] if self.hdr is not None else None
 
     @property
     def shape(self):
-        if self.fmt == 'NHW':
-            shape = (self.tdec.size, self.hdr.shape[0], self.hdr.shape[1])
-        elif self.fmt == 'HWN':
-            shape = (self.hdr.shape[0], self.hdr.shape[1], self.tdec.size)
-        return shape
+        if self.Nt is None or self.Ny is None or self.Nx is None:
+            return None
+        return (self.Nt, self.Ny, self.Nx)
 
 
 class MultiStack:
     """
-    Stack object that represents some arithmetic manipulation of multiple Stacks. Child
-    classes should inherit from this class and implement the self.slice,
-    self.timeseries, and self.get_chunk methods.
+    Virtual stack representing arithmetic manipulation of multiple Stacks.
     """
 
     def __init__(self, stacks=None, files=None):
-        """
-        In the constructor, either store a list of Stack objects or create a list
-        of Stack objects from a list of filenames.
-        """
-        # Store or create list of stacks
         if stacks is not None:
             self.stacks = stacks
         elif files is not None:
@@ -414,24 +679,50 @@ class MultiStack:
         else:
             raise ValueError('Must pass in stacks or filenames.')
 
-        # Cache time and header objects
-        self.tdec = self.stacks[0].tdec
         self.hdr = self.stacks[0].hdr
+        self.fmt = 'NHW'
 
-    def slice(self, index, key='data'):
-        raise NotImplementedError('Child classes must implement slice function')
-
-    def timeseries(self, xy=None, coord=None, key='data', win_size=1):
-        raise NotImplementedError('Child classes must implement timeseries function')
-
-    def get_chunk(self, *args, **kwargs):
-        raise NotImplementedError('Child classes must implement get_chunk function')
+    def _combine(self, key):
+        raise NotImplementedError('Child classes must implement _combine')
 
     def __getitem__(self, key):
-        raise NotImplementedError('Child classes must implement __getitem__ function')
+        return self._combine(key)
 
-    def time_to_index(self, t, date=None):
-        return self.stacks[0].time_to_index(t, date=date)
+    def slice(self, index, key='data'):
+        return np.asarray(self[key].isel(time=index).values)
+
+    def timeseries(self, xy=None, coord=None, key='data', win_size=1):
+        if xy is not None and coord is None:
+            row, col = self.hdr.xy_to_imagecoord(*xy)
+        elif coord is not None:
+            row, col = coord
+        else:
+            raise ValueError('Must pass in geographic or image coordinate.')
+
+        half_win = win_size // 2
+        if row >= (self.Ny - half_win) or row < half_win:
+            return np.full((self.Nt,), np.nan, dtype='f')
+        if col >= (self.Nx - half_win) or col < half_win:
+            return np.full((self.Nt,), np.nan, dtype='f')
+
+        if win_size > 1:
+            data = self[key].isel(
+                y=slice(row - half_win, row + half_win + 1),
+                x=slice(col - half_win, col + half_win + 1),
+            ).mean(dim=('y', 'x'), skipna=True)
+        else:
+            data = self[key].isel(y=row, x=col)
+        return np.asarray(data.values)
+
+    def get_chunk(self, slice_y, slice_x, key='data'):
+        return np.asarray(self[key].isel(y=slice_y, x=slice_x).values)
+
+    def time_to_index(self, t=None, date=None):
+        return self.stacks[0].time_to_index(t=t, date=date)
+
+    @property
+    def tdec(self):
+        return self.stacks[0].tdec
 
     @property
     def dt(self):
@@ -439,24 +730,15 @@ class MultiStack:
 
     @property
     def Nt(self):
-        if self.tdec is not None:
-            return self.tdec.size
-        else:
-            return None
+        return self.stacks[0].Nt
 
     @property
     def Ny(self):
-        if self.hdr is not None:
-            return self.hdr.shape[0]
-        else:
-            return None
+        return self.stacks[0].Ny
 
     @property
     def Nx(self):
-        if self.hdr is not None:
-            return self.hdr.shape[1]
-        else:
-            return None
+        return self.stacks[0].Nx
 
 
 class MagStack(MultiStack):
@@ -464,22 +746,11 @@ class MagStack(MultiStack):
     MultiStack class that computes magnitude of stack objects.
     """
 
-    def slice(self, index, key='data'):
-        dsum = 0.0
+    def _combine(self, key):
+        dsum = None
         for stack in self.stacks:
-            dsum += (stack[key][index, :, :])**2
-        return np.sqrt(dsum)
-
-    def timeseries(self, xy=None, coord=None, key='data', win_size=1):
-        dsum = 0.0
-        for stack in self.stacks:
-            dsum += (stack.timeseries(xy=xy, coord=coord, key=key, win_size=win_size))**2
-        return np.sqrt(dsum)
-
-    def get_chunk(self, slice_y, slice_x, key='data'):
-        dsum = 0.0
-        for stack in self.stacks:
-            dsum += (stack.get_chunk(slice_y, slice_x, key=key))**2
+            term = stack[key] ** 2
+            dsum = term if dsum is None else dsum + term
         return np.sqrt(dsum)
 
 
@@ -488,22 +759,11 @@ class SumStack(MultiStack):
     MultiStack class that performs a sum on the stack objects.
     """
 
-    def slice(self, index, key='data'):
-        dsum = 0.0
+    def _combine(self, key):
+        dsum = None
         for stack in self.stacks:
-            dsum += stack[key][index, :, :]
-        return dsum
-
-    def timeseries(self, xy=None, coord=None, key='data', win_size=1):
-        dsum = 0.0
-        for stack in self.stacks:
-            dsum += stack.timeseries(xy=xy, coord=coord, key=key, win_size=win_size)
-        return dsum
-
-    def get_chunk(self, slice_y, slice_x, key='data'):
-        dsum = 0.0
-        for stack in self.stacks:
-            dsum += stack.get_chunk(slice_y, slice_x, key=key)
+            term = stack[key]
+            dsum = term if dsum is None else dsum + term
         return dsum
 
 
@@ -514,20 +774,7 @@ class SumStack(MultiStack):
 
 def h5read(filename, dataset):
     """
-    Mimics the MATLAB function h5read for reading into a memory a specific dataset
-    provided by an H5 path.
-
-    Parameters
-    ----------
-    filename: str
-        Filename of HDF5 file to read from.
-    dataset: str or list of str
-        H5 path for dataset(s) to read.
-
-    Returns
-    -------
-    data: ndarray or list of ndarray
-        Array(s) for data.
+    Mimics the MATLAB function h5read for reading into memory.
     """
     if isinstance(dataset, str):
         with h5py.File(filename, 'r') as fid:
