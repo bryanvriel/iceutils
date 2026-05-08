@@ -3,6 +3,8 @@ scipy
 matplotlib
 rasterio
 h5py
+h5netcdf
+xarray
 pyproj
 scikit-image
 tqdm

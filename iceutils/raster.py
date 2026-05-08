@@ -268,7 +268,7 @@ class Raster(numpy.lib.mixins.NDArrayOperatorsMixin):
             transform = src.window_transform(window) if window is not None else src.transform
             height, width = d.shape[-2:]
             hdr = RasterInfo(transform=transform, crs=src.crs, shape=(height, width),
-                             dtype=np.dtype(src.dtypes[band - 1]))
+                             dtype=np.dtype(src.dtypes[band - 1]), nbands=src.count)
             nodataval = src.nodatavals[band - 1]
 
         return d, hdr, nodataval
@@ -732,14 +732,19 @@ class RasterInfo:
         Slice object specifying image rows to subset.
     jslice: slice, optional
         Slice object specifying image columns to subset.
+    nbands: int, optional
+        Number of raster bands.
     """
 
     def __init__(self, rasterfile=None, stackfile=None, X=None, Y=None,
                  band=1, epsg=None, match=True, islice=None, jslice=None,
-                 transform=None, crs=None, shape=None, dtype=None, **kwargs):
+                 transform=None, crs=None, shape=None, dtype=None,
+                 nbands=None, **kwargs):
         """
         Initialize attributes.
         """
+        self.nbands = int(nbands) if nbands is not None else None
+
         if rasterfile is not None:
             self.load_rasterio_info(rasterfile, islice=islice, jslice=jslice,
                                     band=band, match=match)
@@ -808,6 +813,7 @@ class RasterInfo:
             self._epsg = self.crs.to_epsg() if self.crs is not None else None
             self.units = 'm'
             self.dtype = np.dtype(src.dtypes[band - 1])
+            self.nbands = int(src.count)
             self._sync_from_transform()
 
     def load_gdal_info(self, rasterfile, projWin=None, islice=None, jslice=None,
