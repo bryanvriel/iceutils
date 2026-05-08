@@ -235,6 +235,29 @@ raster_array = stack['data'].sel(time='2014-06-01', method='nearest').values
 ```
 In the above example, we access stack variables through xarray `DataArray` objects. This exposes named-axis indexing, reductions, coordinate-aware selection, and methods such as `differentiate`.
 
+### Loading NetCDF stacks
+
+The current `Stack` strategy is to keep stack files roughly NetCDF-compliant and to use `xarray` as the backbone for labeled dimensions, coordinates, and array operations. This keeps the `Stack` wrapper small while making common time-series operations available through the broader xarray ecosystem.
+
+NetCDF-compatible stack files can be opened directly:
+
+```python
+import iceutils as ice
+
+stack = ice.Stack('velocity_stack.nc')
+
+# Access the underlying xarray Dataset
+ds = stack.ds
+
+# Access a data variable as an xarray DataArray
+velocity = stack['data']
+
+# Select by decoded time coordinate
+frame = velocity.sel(time='2020-01-01', method='nearest').values
+```
+
+For external NetCDF files, `Stack` expects coordinates/dimensions named `time`, `y`, and `x`. If a file uses names like `lat`/`lon` or a different data variable name, rename with `xarray` first or access the matching variable key from `stack.ds`.
+
 ### Extract time series at a given point
 
 A common action performed on stacks is extracting the 1D time series at a given geographic coordinate:
