@@ -94,6 +94,33 @@ def _solver_module():
     return solver
 
 
+def _xarray_storage_type_names(data_array):
+    names = []
+    obj = data_array.variable._data
+    for _ in range(10):
+        names.append(type(obj).__name__)
+        if isinstance(obj, np.ndarray):
+            break
+        next_obj = None
+        for attr in ("array", "_array"):
+            if hasattr(obj, attr):
+                candidate = getattr(obj, attr)
+                if candidate is not obj:
+                    next_obj = candidate
+                    break
+        if next_obj is None:
+            break
+        obj = next_obj
+    return names
+
+
+def _assert_h5netcdf_lazy(data_array):
+    storage_types = _xarray_storage_type_names(data_array)
+    assert "H5NetCDFArrayWrapper" in storage_types
+    assert "NumpyIndexingAdapter" not in storage_types
+    assert "ndarray" not in storage_types
+
+
 def test_read_write_round_trip_preserves_data_and_metadata(tmp_path):
     data = np.arange(12, dtype=np.float32).reshape(3, 4)
     src = tmp_path / "src.tif"
@@ -327,15 +354,23 @@ def test_stack_reads_legacy_nhw_hdf5_as_canonical_xarray(tmp_path):
         fid["tdec"] = np.array([2020.0, 2021.0])
         fid["data"] = data
         fid["weights"] = data + 1
+        fid["quality"] = np.array([4, 5, 6, 7], dtype=np.int16)
         fid.attrs["EPSG"] = 3413
         fid.attrs["format"] = "NHW"
 
     with Stack(str(path)) as stack:
         assert stack.fmt == "NHW"
         assert stack.original_fmt == "NHW"
+        assert stack._legacy_source_ds is not None
         assert stack["data"].dims == ("time", "y", "x")
+        _assert_h5netcdf_lazy(stack["data"])
+        _assert_h5netcdf_lazy(stack["weights"])
+        assert np.array_equal(stack["data"].isel(time=1, y=slice(None), x=slice(1, 3)).values,
+                              data[1, :, 1:3])
         assert np.array_equal(stack["data"].values, data)
+        assert np.array_equal(stack["quality"].values, np.array([4, 5, 6, 7], dtype=np.int16))
         assert np.array_equal(stack.slice(0), data[0])
+        assert np.array_equal(stack.get_chunk(slice(0, 2), slice(1, 3)), data[:, :, 1:3])
         assert np.array_equal(stack.timeseries(coord=(1, 2)), data[:, 1, 2])
 
 
@@ -355,7 +390,11 @@ def test_stack_reads_legacy_hwn_hdf5_as_canonical_xarray(tmp_path):
         assert stack.fmt == "NHW"
         assert stack.original_fmt == "HWN"
         assert stack.shape == canonical.shape
+        assert stack._legacy_source_ds is not None
         assert stack["data"].dims == ("time", "y", "x")
+        _assert_h5netcdf_lazy(stack["data"])
+        assert np.array_equal(stack["data"].isel(time=1, y=slice(None), x=slice(1, 3)).values,
+                              canonical[1, :, 1:3])
         assert np.array_equal(stack["data"].values, canonical)
         assert np.array_equal(stack.get_chunk(slice(None), slice(None)), canonical)
 

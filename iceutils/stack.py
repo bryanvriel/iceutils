@@ -107,7 +107,7 @@ class Stack:
 
         New files are NetCDF-compatible HDF5 files with xarray dimensions
         ``time``, ``y``, and ``x``. Legacy HDF5 stacks are normalized into the
-        same in-memory dimension order.
+        same xarray dimension order.
         """
         assert mode in ('r', 'r+', 'w', 'a', 'x'), 'Unsupported HDF5 file open mode'
         self.filename = filename
@@ -120,6 +120,7 @@ class Stack:
         self._datasets = {}
         self._dirty = False
         self._legacy = False
+        self._legacy_source_ds = None
         self._time_key = time_key
         self._ds_hdr = ds_hdr
 
@@ -168,7 +169,16 @@ class Stack:
         self._load_legacy_hdf5(ds_hdr=ds_hdr, time_key=time_key)
 
     def _load_legacy_hdf5(self, ds_hdr=None, time_key='tdec'):
+        self._close_legacy_source()
         data_vars = {}
+        raw_ds = None
+        raw_ds_used = False
+        try:
+            raw_ds = xr.open_dataset(self.filename, engine='h5netcdf',
+                                     decode_times=False, phony_dims='sort')
+        except Exception:
+            raw_ds = None
+
         with h5py.File(self.filename, 'r') as fid:
             self.original_fmt = fid.attrs.get('format', 'NHW')
             if isinstance(self.original_fmt, bytes):
@@ -186,6 +196,12 @@ class Stack:
                     continue
                 if key == 'chunk_shape':
                     data_vars[key] = ('chunk_dim', value[()])
+                    continue
+
+                data_array = self._legacy_data_array(raw_ds, key, value, x, y, time)
+                if data_array is not None:
+                    data_vars[key] = data_array
+                    raw_ds_used = True
                     continue
 
                 arr = value[()]
@@ -211,10 +227,37 @@ class Stack:
             if 'EPSG' in fid.attrs:
                 attrs['EPSG'] = int(fid.attrs['EPSG'])
 
+        if raw_ds is not None:
+            if raw_ds_used:
+                self._legacy_source_ds = raw_ds
+            else:
+                raw_ds.close()
+
         self.ds = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
         self.hdr = self._rasterinfo_from_dataset(self.ds)
         self.fmt = 'NHW'
         self._update_dataset_cache()
+
+    def _legacy_data_array(self, raw_ds, key, value, x, y, time):
+        if raw_ds is None or '/' in key or key not in raw_ds:
+            return None
+
+        data = raw_ds[key]
+        shape = value.shape
+        if value.ndim == 3:
+            if self.original_fmt == 'HWN' or shape == (y.size, x.size, time.size):
+                data = data.rename(dict(zip(data.dims, ('y', 'x', 'time'))))
+                return data.transpose('time', 'y', 'x')
+            data = data.rename(dict(zip(data.dims, ('time', 'y', 'x'))))
+            return data.transpose('time', 'y', 'x')
+        if value.ndim == 2 and shape == (y.size, x.size):
+            return data.rename(dict(zip(data.dims, ('y', 'x'))))
+        return None
+
+    def _close_legacy_source(self):
+        if self._legacy_source_ds is not None:
+            self._legacy_source_ds.close()
+            self._legacy_source_ds = None
 
     @staticmethod
     def _iter_hdf5_datasets(group, prefix=''):
@@ -621,6 +664,7 @@ class Stack:
         """
         if self.ds is not None:
             self.ds.close()
+        self._close_legacy_source()
         if self.fid is not None:
             self.fid.close()
             self.fid = None

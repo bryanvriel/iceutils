@@ -210,7 +210,7 @@ time        Dataset {K}
 data        Dataset {K, M, N}
 weights     Dataset {K, M, N}
 ```
-The first two datasets are 1D datasets corresponding to the coordinates of the stack. The `time` coordinate is stored using CF-style units, `seconds since 1970-01-01 00:00:00`, and is decoded by `xarray` as datetimes. The `Stack.tdec` property computes decimal years on demand for compatibility with older `iceutils` workflows. The 3D dataset `data` contains the actual stack, and `weights` corresponds to optional weights associated with each raster. Legacy HDF5 stacks with `tdec`, `igram`, `data`, `weights`, `NHW`, or `HWN` layouts are still readable and are normalized to `("time", "y", "x")` in memory.
+The first two datasets are 1D datasets corresponding to the coordinates of the stack. The `time` coordinate is stored using CF-style units, `seconds since 1970-01-01 00:00:00`, and is decoded by `xarray` as datetimes. The `Stack.tdec` property computes decimal years on demand for compatibility with older `iceutils` workflows. The 3D dataset `data` contains the actual stack, and `weights` corresponds to optional weights associated with each raster. Legacy HDF5 stacks with `tdec`, `igram`, `data`, `weights`, `NHW`, or `HWN` layouts are still readable and are presented as `("time", "y", "x")` xarray variables.
 
 ### The `Stack` class
 
