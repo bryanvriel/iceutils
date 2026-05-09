@@ -1,4 +1,5 @@
 import os
+import importlib.util
 from pathlib import Path
 import subprocess
 import sys
@@ -56,6 +57,41 @@ def _write_multiband_geotiff(path, data, transform=None, crs="EPSG:3413"):
     ) as dst:
         dst.write(data)
     return transform
+
+
+def _stack_hdr(shape=(3, 4)):
+    return RasterInfo(
+        transform=Affine(2.0, 0.0, 10.0, 0.0, -3.0, 20.0),
+        crs=CRS.from_epsg(3413),
+        shape=shape,
+    )
+
+
+def _write_stack(path, data, key="data", weights=None):
+    tdec = np.arange(data.shape[0], dtype=float) + 2020.0
+    with Stack(str(path), mode="w") as stack:
+        stack.initialize(tdec, _stack_hdr(data.shape[1:]), data=False)
+        stack.create_dataset(key, data.shape, dtype=data.dtype)
+        stack.set_chunk(slice(None), slice(None), data, key=key)
+        if weights is not None:
+            stack.create_dataset("weights", weights.shape, dtype=weights.dtype)
+            stack.set_chunk(slice(None), slice(None), weights, key="weights")
+
+
+def _load_bin_script(name):
+    path = Path(__file__).resolve().parents[1] / "bin" / name
+    spec = importlib.util.spec_from_file_location(name.replace(".", "_"), path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _solver_module():
+    try:
+        from iceutils.tseries import solver
+    except ImportError as err:
+        pytest.skip("optional time-series solver dependencies unavailable: %s" % err)
+    return solver
 
 
 def test_read_write_round_trip_preserves_data_and_metadata(tmp_path):
@@ -322,3 +358,115 @@ def test_stack_reads_legacy_hwn_hdf5_as_canonical_xarray(tmp_path):
         assert stack["data"].dims == ("time", "y", "x")
         assert np.array_equal(stack["data"].values, canonical)
         assert np.array_equal(stack.get_chunk(slice(None), slice(None)), canonical)
+
+
+def test_solver_chunk_flattening_uses_canonical_xarray_order(tmp_path):
+    solver = _solver_module()
+    path = tmp_path / "solver_stack.h5"
+    data = np.arange(36, dtype=np.float32).reshape(3, 3, 4)
+    weights = data + 100.0
+    mask = np.array([
+        [True, False, True, True],
+        [False, True, True, False],
+        [True, True, False, True],
+    ])
+    _write_stack(path, data, weights=weights)
+
+    with Stack(str(path)) as stack:
+        data2d, wgts2d, data1d, wgts1d, chunk_mask = solver._stack_chunk_to_timeseries(
+            stack, slice(0, 2), slice(1, 4), mask=mask
+        )
+
+    expected_data = data[:, 0:2, 1:4]
+    expected_weights = weights[:, 0:2, 1:4]
+    expected_mask = mask[0:2, 1:4]
+    assert np.array_equal(data2d, expected_data)
+    assert np.array_equal(wgts2d, expected_weights)
+    assert np.array_equal(chunk_mask, expected_mask)
+    assert np.array_equal(data1d, expected_data[:, expected_mask])
+    assert np.array_equal(wgts1d, expected_weights[:, expected_mask])
+
+
+def test_solver_chunk_flattening_reads_legacy_hwn_as_canonical(tmp_path):
+    solver = _solver_module()
+    path = tmp_path / "solver_legacy_hwn.h5"
+    canonical = np.arange(36, dtype=np.float32).reshape(3, 3, 4)
+    weights = canonical + 10.0
+    mask = np.array([
+        [True, False, True, True],
+        [False, True, True, False],
+        [True, True, False, True],
+    ])
+    with h5py.File(path, "w") as fid:
+        fid["x"] = np.array([10.0, 12.0, 14.0, 16.0])
+        fid["y"] = np.array([20.0, 17.0, 14.0])
+        fid["tdec"] = np.array([2020.0, 2021.0, 2022.0])
+        fid["data"] = np.moveaxis(canonical, 0, -1)
+        fid["weights"] = np.moveaxis(weights, 0, -1)
+        fid.attrs["EPSG"] = 3413
+        fid.attrs["format"] = "HWN"
+
+    with Stack(str(path)) as stack:
+        data2d, wgts2d, data1d, wgts1d, chunk_mask = solver._stack_chunk_to_timeseries(
+            stack, slice(1, 3), slice(0, 3), mask=mask
+        )
+
+    expected_data = canonical[:, 1:3, 0:3]
+    expected_weights = weights[:, 1:3, 0:3]
+    expected_mask = mask[1:3, 0:3]
+    assert np.array_equal(data2d, expected_data)
+    assert np.array_equal(wgts2d, expected_weights)
+    assert np.array_equal(chunk_mask, expected_mask)
+    assert np.array_equal(data1d, expected_data[:, expected_mask])
+    assert np.array_equal(wgts1d, expected_weights[:, expected_mask])
+
+
+@pytest.mark.parametrize(
+    "source_key, include_weights",
+    [
+        ("data", True),
+        ("data", False),
+        ("igram", False),
+    ],
+)
+def test_ice_crop_stack_uses_xarray_dims_and_optional_weights(
+    tmp_path, source_key, include_weights
+):
+    src = tmp_path / "crop_input.h5"
+    out = tmp_path / "crop_output.h5"
+    data = np.arange(36, dtype=np.float32).reshape(3, 3, 4)
+    weights = data + 50.0 if include_weights else None
+    _write_stack(src, data, key=source_key, weights=weights)
+    script = Path(__file__).resolve().parents[1] / "bin" / "ice_crop_stack.py"
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            str(src),
+            str(out),
+            "-srcWin",
+            "1",
+            "0",
+            "2",
+            "2",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    with Stack(str(out)) as stack:
+        assert stack["data"].dims == ("time", "y", "x")
+        assert np.array_equal(stack["data"].values, data[:, 0:2, 1:3])
+        assert ("weights" in stack.ds) == include_weights
+        if include_weights:
+            assert np.array_equal(stack["weights"].values, weights[:, 0:2, 1:3])
+
+
+def test_ice_resample_detects_netcdf_stack_inputs():
+    module = _load_bin_script("ice_resample.py")
+
+    assert module._is_stack_file("velocity_stack.h5")
+    assert module._is_stack_file("velocity_stack.nc")
+    assert not module._is_stack_file("velocity_stack.tif")

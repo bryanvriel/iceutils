@@ -78,12 +78,9 @@ def main(args):
     mean = mean.reshape(stack.Ny, stack.Nx)
 
     # Check time array shape
-    ds_shape = stack[args.key].shape
-    if stack.fmt == 'NHW':
-        Nt = ds_shape[0]
-    elif stack.fmt == 'HWN':
-        Nt = ds_shape[2]
-    if Nt != stack.tdec.size:
+    data_array = stack[args.key]
+    Nt = data_array.sizes.get('time', data_array.shape[0])
+    if stack.tdec is None or Nt != stack.tdec.size:
         tdec = np.arange(Nt)
         tlabel = 'Index'
     else:
@@ -99,8 +96,9 @@ def main(args):
             mtdec = mstack[args.mtdec].values
         else:
             mtdec = mstack.tdec
-            M_Nt = mstack[args.mkey].sizes.get('time', mstack[args.mkey].shape[0])
-            if M_Nt != mtdec.size:
+            mdata = mstack[args.mkey]
+            M_Nt = mdata.sizes.get('time', mdata.shape[0])
+            if mtdec is None or M_Nt != mtdec.size:
                 mtdec = np.arange(M_Nt)
 
     # Load reference SAR image

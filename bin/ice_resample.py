@@ -5,6 +5,9 @@ import argparse
 import iceutils as ice
 import sys
 
+def _is_stack_file(filename):
+    return filename.lower().endswith(('.h5', '.nc'))
+
 def parse():
     parser = argparse.ArgumentParser(description="""
         Resample raster/stack to another.""")
@@ -33,7 +36,7 @@ def parse():
 def main(args):
     
     # Load the raster/stack and reference raster/stack
-    if args.raster.endswith('.h5'):
+    if _is_stack_file(args.raster):
 
         # Input stack
         inobj = ice.Stack(args.raster)
