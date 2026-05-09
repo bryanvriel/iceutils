@@ -16,6 +16,34 @@ from .. import pymp
 from .LinearRegression import *
 from .model import build_temporal_model, build_temporal_model_fromfile
 
+def _stack_chunk_array(stack, islice, jslice, key='data'):
+    """
+    Read a spatial chunk from an xarray-backed Stack in canonical time/y/x order.
+    """
+    data = stack[key].isel(y=islice, x=jslice).transpose('time', 'y', 'x')
+    return np.asarray(data.values)
+
+def _stack_chunk_to_timeseries(stack, islice, jslice, dkey='data',
+                               no_weights=False, mask=None):
+    """
+    Return chunk arrays and time-by-pixel views for inversion.
+    """
+    data2d = _stack_chunk_array(stack, islice, jslice, key=dkey)
+    if no_weights:
+        wgts2d = np.ones_like(data2d)
+    else:
+        wgts2d = _stack_chunk_array(stack, islice, jslice, key='weights')
+
+    _, chunk_ny, chunk_nx = data2d.shape
+    if mask is None:
+        chunk_mask = np.ones((chunk_ny, chunk_nx), dtype=bool)
+    else:
+        chunk_mask = np.asarray(mask[islice, jslice], dtype=bool)
+
+    data1d = data2d[:, chunk_mask]
+    wgts1d = wgts2d[:, chunk_mask]
+    return data2d, wgts2d, data1d, wgts1d, chunk_mask
+
 def inversion(stack, userfile, outdir, cleaned_stack=None,
               solver_type='lsqr', dkey='data', nt_out=200, n_proc=8, regParam=1.0,
               rw_iter=1, robust=False, n_nonzero_coefs=10, n_min=20, n_iter=1,
@@ -76,26 +104,11 @@ def inversion(stack, userfile, outdir, cleaned_stack=None,
         # Start timing
         t0 = pytime.time()
 
-        # Get chunk of time series data and weights
-        data2d = stack.get_chunk(islice, jslice, key=dkey)
-        if no_weights:
-            wgts2d = np.ones_like(data2d)
-        else:
-            wgts2d = stack.get_chunk(islice, jslice, key='weights')
-
-        # Extract valid pixels in this chunk into 1d arrays
-        if stack.fmt == 'NHW':
-            _, chunk_ny, chunk_nx = data2d.shape
-            chunk_npix = chunk_ny * chunk_nx
-            chunk_mask = mask[islice, jslice]
-            data1d = data2d[:, chunk_mask]
-            wgts1d = wgts2d[:, chunk_mask]
-        else:
-            chunk_ny, chunk_nx, _ = data2d.shape
-            chunk_npix = chunk_ny * chunk_nx
-            chunk_mask = mask[islice, jslice]
-            data1d = data2d[chunk_mask, :].T
-            wgts1d = wgts2d[chunk_mask, :].T
+        # Get chunk data as canonical (time, y, x) arrays and flatten valid pixels.
+        data2d, wgts2d, data1d, wgts1d, chunk_mask = _stack_chunk_to_timeseries(
+            stack, islice, jslice, dkey=dkey, no_weights=no_weights, mask=mask
+        )
+        _, chunk_ny, chunk_nx = data2d.shape
         npix = data1d.shape[1]
 
         # Transfer to shared arrays
@@ -145,13 +158,9 @@ def inversion(stack, userfile, outdir, cleaned_stack=None,
 
         # Optional saving of cleaned stack
         if cleaned_stack is not None:
-            # First transfer 1d arrays to original 2d chunks
-            if stack.fmt == 'NHW':
-                data2d[:, chunk_mask] = data
-                wgts2d[:, chunk_mask] = wgts
-            else:
-                data2d[chunk_mask, :] = data.T
-                wgts2d[chunk_mask, :] = wgts.T
+            # First transfer 1d arrays to original 2d chunks.
+            data2d[:, chunk_mask] = data
+            wgts2d[:, chunk_mask] = wgts
             # Write to output stack
             clean_stack.set_chunk(islice, jslice, data2d, key='data')
             clean_stack.set_chunk(islice, jslice, wgts2d, key='weights')
@@ -249,14 +258,13 @@ def inversion_points(stack, userfile, x, y, solver_type='lsqr',
 def butterworth(stack, a, b, fname_long, fname_short, n_proc=1):
 
     # Instantiate and initialize output stacks
-    shape = (stack.Nt, stack.Ny, stack.Nx)
     long_stack = Stack(fname_long, mode='w')
     short_stack = Stack(fname_short, mode='w')
     for ostack in (long_stack, short_stack):
         ostack.initialize(stack.tdec, stack.hdr, data=True, weights=False)
 
     # Get list of chunks
-    chunks = get_chunks(stack, 128, 128)
+    chunks = get_chunks((stack.Ny, stack.Nx), 128, 128)
 
     # Loop over chunks
     for islice, jslice in chunks:
@@ -265,7 +273,7 @@ def butterworth(stack, a, b, fname_long, fname_short, n_proc=1):
         t0 = pytime.time()
 
         # Get chunk of time series data
-        data = stack.get_chunk(islice, jslice, key='data')
+        data = _stack_chunk_array(stack, islice, jslice, key='data')
         _, chunk_ny, chunk_nx = data.shape
         npix = chunk_ny * chunk_nx
 

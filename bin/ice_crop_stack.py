@@ -79,19 +79,26 @@ def main(args):
     hdr = ice.RasterInfo(X=X, Y=Y)
 
     # Create output stack
+    has_weights = 'weights' in stack.ds
     ostack = ice.Stack(args.output, mode='w')
-    ostack.initialize(tdec, hdr, data=True, weights=True,
+    ostack.initialize(tdec, hdr, data=True, weights=has_weights,
                       chunks=(1, args.chunks[0], args.chunks[1]))
 
     # Manually fill in the data
-    try:
-        data = stack['data'].isel(time=tslice, y=islice, x=jslice)
-    except KeyError:
-        data = stack['igram'].isel(time=tslice, y=islice, x=jslice)
+    if 'data' in stack.ds:
+        source_key = 'data'
+    elif 'igram' in stack.ds:
+        source_key = 'igram'
+    else:
+        raise KeyError('data')
+
+    data = stack[source_key].isel(time=tslice, y=islice, x=jslice)
+    data = data.transpose('time', 'y', 'x')
     ostack.set_chunk(slice(None), slice(None), data, key='data')
-    ostack.set_chunk(slice(None), slice(None),
-                     stack['weights'].isel(time=tslice, y=islice, x=jslice),
-                     key='weights')
+    if has_weights:
+        weights = stack['weights'].isel(time=tslice, y=islice, x=jslice)
+        weights = weights.transpose('time', 'y', 'x')
+        ostack.set_chunk(slice(None), slice(None), weights, key='weights')
 
     
 if __name__ == '__main__':
