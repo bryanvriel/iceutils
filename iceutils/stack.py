@@ -58,7 +58,7 @@ def _datetime64_to_tdec(time):
     """
     arr = np.asarray(time)
     if not np.issubdtype(arr.dtype, np.datetime64):
-        arr = EPOCH + np.rint(arr.astype(float) * 1.0e9).astype('timedelta64[ns]')
+        arr = _seconds_since_epoch_to_datetime64(arr)
     arr = arr.astype('datetime64[ns]')
     year_coord = arr.astype('datetime64[Y]')
     years = year_coord.astype(int) + 1970
@@ -77,13 +77,34 @@ def _time_values_to_datetime64(values, units=None):
     if np.issubdtype(arr.dtype, np.datetime64):
         return arr.astype('datetime64[ns]')
     if units is not None and units.startswith('seconds since 1970-01-01'):
-        return EPOCH + np.rint(arr.astype(float) * 1.0e9).astype('timedelta64[ns]')
+        return _seconds_since_epoch_to_datetime64(arr)
     return _tdec_to_datetime64(arr)
 
 
+def _seconds_since_epoch_to_datetime64(values):
+    """
+    Convert Unix seconds to datetime64 values.
+
+    Older Stack writes could store integer nanoseconds while still labelling
+    the coordinate as Unix seconds. Treat implausibly large second values as
+    nanoseconds so those files remain readable.
+    """
+    arr = np.asarray(values)
+    if np.any(~np.isfinite(arr.astype(float))):
+        raise ValueError('Time coordinate contains non-finite values.')
+
+    if arr.size and np.nanmax(np.abs(arr.astype(float))) > 1.0e12:
+        nanoseconds = np.rint(arr.astype(float)).astype(np.int64)
+    else:
+        nanoseconds = np.rint(arr.astype(float) * 1.0e9).astype(np.int64)
+    return EPOCH + nanoseconds.astype('timedelta64[ns]')
+
+
 def _needs_float_time_encoding(times):
-    seconds = (np.asarray(times).astype('datetime64[ns]') - EPOCH) / np.timedelta64(1, 's')
-    return not np.allclose(seconds, np.rint(seconds))
+    nanoseconds = (
+        np.asarray(times).astype('datetime64[ns]') - EPOCH
+    ).astype('timedelta64[ns]').astype(np.int64)
+    return np.any(nanoseconds % 1000000000 != 0)
 
 
 def _time_encoding(times):
