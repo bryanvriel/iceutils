@@ -8,6 +8,28 @@ import sys
 
 line = None
 
+def parse_indexer(value):
+    try:
+        dim, index = value.split('=', 1)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            'Indexers must be provided as DIM=INDEX'
+        ) from exc
+    if not dim:
+        raise argparse.ArgumentTypeError(
+            'Indexer dimension cannot be empty'
+        )
+    try:
+        index = int(index)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            'Indexer index must be an integer'
+        ) from exc
+    return dim, index
+
+def indexer_dict(values):
+    return dict(values or [])
+
 def parse():
     parser = argparse.ArgumentParser(description="""
         Draw points on a map""")
@@ -15,6 +37,9 @@ def parse():
         help='Input stack file to display.')
     parser.add_argument('-key', action='store', type=str, default='data',
         help='Dataset to compute mean of. Default: data.')
+    parser.add_argument('-isel', action='append', type=parse_indexer, default=[],
+        metavar='DIM=INDEX',
+        help='Select an extra stack dimension by zero-based index.')
     parser.add_argument('-ref', action='store', type=str, default=None,
         help='Reference SAR raster for background. Default: None.')
     parser.add_argument('-alpha', action='store', type=float, default=1.0,
@@ -34,7 +59,9 @@ def parse():
 def main(args):
 
     # Load the stack
-    stack = ice.Stack(args.stackfile, ds_hdr=args.key)
+    stack = ice.Stack(
+        args.stackfile, ds_hdr=args.key, indexers=indexer_dict(args.isel)
+    )
 
     # Check if requested dataset is 2D. If so, view it directly
     if stack[args.key].ndim == 2:
