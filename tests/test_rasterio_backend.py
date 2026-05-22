@@ -1,4 +1,5 @@
 import os
+import argparse
 import importlib.util
 from pathlib import Path
 import subprocess
@@ -345,6 +346,42 @@ def test_stack_writes_xarray_format_with_unix_second_time_encoding(tmp_path):
         assert deriv.dims == ("time", "y", "x")
 
 
+def test_stack_indexers_select_extra_netcdf_dimensions(tmp_path):
+    path = tmp_path / "multiband_stack.nc"
+    data = np.arange(2 * 3 * 4 * 5, dtype=np.float32).reshape(2, 3, 4, 5)
+    time1 = np.array([10.0, 20.0], dtype=np.float32)
+    ds = xr.Dataset(
+        data_vars={
+            "VelocityMap": (("time", "band", "y", "x"), data),
+            "time1": ("time", time1),
+        },
+        coords={
+            "time": ("time", np.array(["2020-01-01", "2021-01-01"], dtype="datetime64[ns]")),
+            "band": ("band", np.arange(3)),
+            "y": ("y", np.array([20.0, 17.0, 14.0, 11.0])),
+            "x": ("x", np.array([10.0, 12.0, 14.0, 16.0, 18.0])),
+        },
+        attrs={"EPSG": 3413},
+    )
+    ds.to_netcdf(path, engine="h5netcdf")
+    ds.close()
+
+    with Stack(str(path), indexers={"band": 1}) as stack:
+        assert stack["VelocityMap"].dims == ("time", "y", "x")
+        assert np.array_equal(stack["VelocityMap"].values, data[:, 1])
+        assert np.array_equal(stack["time1"].values, time1)
+        assert np.array_equal(stack.slice(1, key="VelocityMap"), data[1, 1])
+        assert np.array_equal(
+            stack.get_chunk(slice(1, 3), slice(2, 5), key="VelocityMap"),
+            data[:, 1, 1:3, 2:5],
+        )
+        assert np.array_equal(
+            stack.timeseries(coord=(2, 3), key="VelocityMap"),
+            data[:, 1, 2, 3],
+        )
+        assert np.array_equal(stack.mean(key="VelocityMap"), data[:, 1].mean(axis=0))
+
+
 def test_stack_reads_legacy_nhw_hdf5_as_canonical_xarray(tmp_path):
     path = tmp_path / "legacy_nhw.h5"
     data = np.arange(12, dtype=np.float32).reshape(2, 2, 3)
@@ -509,3 +546,21 @@ def test_ice_resample_detects_netcdf_stack_inputs():
     assert module._is_stack_file("velocity_stack.h5")
     assert module._is_stack_file("velocity_stack.nc")
     assert not module._is_stack_file("velocity_stack.tif")
+
+
+def test_ice_explore_stack_parses_extra_dimension_indexers():
+    module = _load_bin_script("ice_explore_stack.py")
+
+    assert module.parse_indexer("band=0") == ("band", 0)
+    assert module.parse_indexer("component=12") == ("component", 12)
+    assert module.indexer_dict([("band", 1), ("component", 2)]) == {
+        "band": 1,
+        "component": 2,
+    }
+
+    with pytest.raises(argparse.ArgumentTypeError):
+        module.parse_indexer("band")
+    with pytest.raises(argparse.ArgumentTypeError):
+        module.parse_indexer("=0")
+    with pytest.raises(argparse.ArgumentTypeError):
+        module.parse_indexer("band=first")

@@ -102,7 +102,8 @@ class Stack:
 
     def __init__(self, filename, mode='r', fmt='NHW',
                  init_stack=None, init_tdec=None, init_rasterinfo=None,
-                 init_names=None, init_data=False, ds_hdr=None, time_key='tdec'):
+                 init_names=None, init_data=False, ds_hdr=None, time_key='tdec',
+                 indexers=None):
         """Reads Stack from an existing file or creates a new Stack.
 
         New files are NetCDF-compatible HDF5 files with xarray dimensions
@@ -123,6 +124,7 @@ class Stack:
         self._legacy_source_ds = None
         self._time_key = time_key
         self._ds_hdr = ds_hdr
+        self._indexers = self._normalize_indexers(indexers)
 
         if mode in ('r', 'r+') or (mode == 'a' and os.path.exists(filename)):
             self._open_existing(ds_hdr=ds_hdr, time_key=time_key)
@@ -484,12 +486,23 @@ class Stack:
             return chunks
         return tuple(min(int(chunk), int(size)) for chunk, size in zip(chunks, shape))
 
+    @staticmethod
+    def _normalize_indexers(indexers):
+        if indexers is None:
+            return {}
+        return {str(key): int(value) for key, value in dict(indexers).items()}
+
     def __getitem__(self, name):
         """
         Return an xarray DataArray.
         """
         self._refresh_dataset_if_dirty()
-        return self.ds[name]
+        data = self.ds[name]
+        indexers = {
+            key: value for key, value in self._indexers.items()
+            if key in data.dims
+        }
+        return data.isel(**indexers) if indexers else data
 
     def __setitem__(self, name, value):
         """
