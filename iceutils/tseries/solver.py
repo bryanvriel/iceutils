@@ -13,8 +13,9 @@ from joblib import Parallel, delayed
 from ..constants import *
 from ..raster import get_chunks
 from ..stack import Stack
+from ..timeutils import tdec2datestr
 from .LinearRegression import *
-from .model import build_temporal_model, build_temporal_model_fromfile
+from .model import Model, build_temporal_model, build_temporal_model_fromfile
 
 _INVERSION_KEYS = ('full', 'secular', 'seasonal', 'transient', 'sigma')
 _PREDICTION_KEYS = ('full', 'secular', 'seasonal', 'transient')
@@ -78,6 +79,74 @@ def _solver_config(solver_type, reg_indices=None, rw_iter=1, regMat=None,
         'n_nonzero_coefs': n_nonzero_coefs,
         'n_min': n_min,
     }
+
+
+def _is_temporal_model(obj):
+    """
+    Return True for iceutils temporal model instances.
+    """
+    return isinstance(obj, Model)
+
+
+def _model_at_tdec(model, tdec):
+    """
+    Re-evaluate a pre-built temporal model collection at new decimal years.
+    """
+    dates = tdec2datestr(tdec, returndate=True)
+    return Model(dates, collection=model.collection)
+
+
+def _regularization_matrix_from_model_prior(model, prior_cov):
+    """
+    Resolve a regularization matrix for a pre-built model.
+    """
+    if isinstance(prior_cov, np.ndarray):
+        return np.linalg.inv(prior_cov)
+
+    return None
+
+
+def _regularization_indices(model):
+    """
+    Return the model-defined columns that should be regularized.
+    """
+    reg_indices = getattr(model, 'reg_indices', None)
+    if reg_indices is not None and len(reg_indices) > 0:
+        return reg_indices
+    return model.itransient
+
+
+def _resolve_temporal_models(model_or_userfile, stack_tdec, nt_out,
+                             prior_cov=False):
+    """
+    Build data/output temporal models from either a model instance or userfile.
+    """
+    tfit = np.linspace(stack_tdec[0], stack_tdec[-1], nt_out)
+
+    if _is_temporal_model(model_or_userfile):
+        data_model = model_or_userfile
+        if data_model.G.shape[0] != len(stack_tdec):
+            raise ValueError(
+                'Input model has %d epochs, but stack has %d time steps.' %
+                (data_model.G.shape[0], len(stack_tdec))
+            )
+        output_model = _model_at_tdec(data_model, tfit)
+        regMat = _regularization_matrix_from_model_prior(data_model, prior_cov)
+        return data_model, output_model, regMat, tfit
+
+    if prior_cov:
+        data_model, Cm = build_temporal_model_fromfile(
+            stack_tdec, model_or_userfile, cov=prior_cov
+        )
+        regMat = np.linalg.inv(Cm)
+    else:
+        data_model = build_temporal_model_fromfile(
+            stack_tdec, model_or_userfile, cov=prior_cov
+        )
+        regMat = None
+
+    output_model = build_temporal_model_fromfile(tfit, model_or_userfile, cov=False)
+    return data_model, output_model, regMat, tfit
 
 
 def _model_prediction_spec(model):
@@ -265,19 +334,13 @@ def inversion(stack, userfile, outdir, cleaned_stack=None,
               rw_iter=1, robust=False, n_nonzero_coefs=10, n_min=20, n_iter=1,
               n_std=3.0, no_weights=False, prior_cov=True, mask_raster=None):
 
-    # Create a time series model defined at the data points
-    if prior_cov:
-        data_model, Cm = build_temporal_model_fromfile(stack.tdec, userfile, cov=prior_cov)
-        regMat = np.linalg.inv(Cm)
-    else:
-        data_model = build_temporal_model_fromfile(stack.tdec, userfile, cov=prior_cov)
-        regMat = None
+    # Create temporal models defined at the data points and output points.
+    data_model, model, regMat, tfit = _resolve_temporal_models(
+        userfile, stack.tdec, nt_out, prior_cov=prior_cov
+    )
+
     # Cache the design matrix
     G = data_model.G
-
-    # Create a time series model defined at equally spaced time points
-    tfit = np.linspace(stack.tdec[0], stack.tdec[-1], nt_out)
-    model = build_temporal_model_fromfile(tfit, userfile, cov=False)
 
     # Load a mask and resample to stack geometry
     if mask_raster is not None:
@@ -290,7 +353,7 @@ def inversion(stack, userfile, outdir, cleaned_stack=None,
         mask = np.ones((stack.Ny, stack.Nx), dtype=bool)
 
     # Cache serializable worker configuration.
-    solver_cfg = _solver_config(solver_type, reg_indices=model.itransient,
+    solver_cfg = _solver_config(solver_type, reg_indices=_regularization_indices(model),
                                 rw_iter=rw_iter, regMat=regMat, robust=robust,
                                 penalty=regParam,
                                 n_nonzero_coefs=n_nonzero_coefs, n_min=n_min)
@@ -408,18 +471,16 @@ def inversion_points(stack, userfile, x, y, solver_type='lsqr',
     n_pts = len(x)
     assert len(y) == n_pts, 'Mismatch in sizes of input points'
 
-    # Create a time series model defined at the data points
-    data_model, Cm = build_temporal_model_fromfile(stack.tdec, userfile, cov=True)
-    regMat = np.linalg.inv(Cm)
+    # Create temporal models defined at the data points and output points.
+    data_model, model, regMat, tfit = _resolve_temporal_models(
+        userfile, stack.tdec, nt_out, prior_cov=True
+    )
+
     # Cache the design matrix
     G = data_model.G.copy()
 
-    # Create a time series model defined at equally spaced time points
-    tfit = np.linspace(stack.tdec[0], stack.tdec[-1], nt_out)
-    model = build_temporal_model_fromfile(tfit, userfile, cov=False)
-
     # Cache serializable worker configuration.
-    solver_cfg = _solver_config(solver_type, reg_indices=model.itransient,
+    solver_cfg = _solver_config(solver_type, reg_indices=_regularization_indices(model),
                                 rw_iter=rw_iter, regMat=regMat, robust=robust,
                                 penalty=regParam,
                                 n_nonzero_coefs=n_nonzero_coefs, n_min=n_min)

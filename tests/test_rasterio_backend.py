@@ -372,6 +372,58 @@ def test_stack_writes_xarray_format_with_unix_second_time_encoding(tmp_path):
         assert deriv.dims == ("time", "y", "x")
 
 
+def test_stack_writes_fractional_second_times_as_float_seconds(tmp_path):
+    path = tmp_path / "stack_fractional_time.h5"
+    hdr = RasterInfo(
+        transform=Affine(2.0, 0.0, 10.0, 0.0, -3.0, 20.0),
+        crs=CRS.from_epsg(3413),
+        shape=(2, 3),
+    )
+    tdec = np.array([2020.0409836065573, 2024.872950819672])
+
+    with Stack(str(path), mode="w") as stack:
+        stack.initialize(tdec, hdr, data=False)
+        assert stack.ds["time"].sizes["time"] == 2
+
+    with h5py.File(path, "r") as fid:
+        units = fid["time"].attrs["units"]
+        if isinstance(units, bytes):
+            units = units.decode("utf-8")
+        assert units == TIME_UNITS
+        assert fid["time"].dtype.kind == "f"
+
+    with Stack(str(path)) as stack:
+        assert np.allclose(stack.tdec, tdec)
+
+
+def test_stack_reads_legacy_nanosecond_time_values_with_second_units(tmp_path):
+    path = tmp_path / "stack_legacy_nanosecond_time.h5"
+    times = np.array(
+        [
+            "2020-01-15T23:59:59.999998976",
+            "2020-02-14T23:59:59.999997184",
+            "2020-03-16T00:00:00.000002560",
+        ],
+        dtype="datetime64[ns]",
+    )
+    epoch = np.datetime64("1970-01-01T00:00:00", "ns")
+    nanoseconds = (times - epoch).astype("timedelta64[ns]").astype(np.int64)
+
+    with h5py.File(path, "w") as fid:
+        fid.attrs["format"] = "xarray"
+        fid.attrs["EPSG"] = 3413
+        time = fid.create_dataset("time", data=nanoseconds)
+        time.attrs["units"] = TIME_UNITS
+        time.attrs["calendar"] = "proleptic_gregorian"
+        fid.create_dataset("y", data=np.array([20.0, 17.0]))
+        fid.create_dataset("x", data=np.array([10.0, 12.0, 14.0]))
+        fid.create_dataset("data", data=np.zeros((times.size, 2, 3), dtype=np.float32))
+
+    with Stack(str(path)) as stack:
+        assert np.array_equal(stack.ds["time"].values.astype("datetime64[ns]"), times)
+        assert np.ptp(stack.tdec) > 0.0
+
+
 def test_stack_indexers_select_extra_netcdf_dimensions(tmp_path):
     path = tmp_path / "multiband_stack.nc"
     data = np.arange(2 * 3 * 4 * 5, dtype=np.float32).reshape(2, 3, 4, 5)
@@ -580,6 +632,66 @@ def test_solver_inversion_joblib_matches_serial_with_cleaned_stack(tmp_path):
         serial = _read_stack_variable(serial_dir / "cleaned.h5", key=key)
         parallel = _read_stack_variable(parallel_dir / "cleaned.h5", key=key)
         np.testing.assert_allclose(parallel, serial, equal_nan=True)
+
+
+def test_solver_inversion_accepts_model_instance(tmp_path):
+    solver = _solver_module()
+    userfile = _write_linear_user_model(tmp_path / "linear_model.py")
+    stack_path = tmp_path / "model_stack.h5"
+    file_dir = tmp_path / "file_model"
+    instance_dir = tmp_path / "instance_model"
+    file_dir.mkdir()
+    instance_dir.mkdir()
+
+    time = np.arange(6, dtype=np.float32)[:, None, None]
+    rows, cols = np.indices((2, 3), dtype=np.float32)
+    data = 1.5 + 0.4 * time + 0.25 * rows + 0.05 * cols
+    _write_stack(stack_path, data.astype(np.float32))
+
+    with Stack(str(stack_path)) as stack:
+        solver.inversion(
+            stack,
+            userfile,
+            str(file_dir),
+            solver_type="lsqr",
+            nt_out=5,
+            n_proc=1,
+            n_min=2,
+            no_weights=True,
+        )
+
+    with Stack(str(stack_path)) as stack:
+        model = solver.build_temporal_model(
+            stack.tdec, poly=1, periods=[], isplines=[], bsplines=[]
+        )
+        solver.inversion(
+            stack,
+            model,
+            str(instance_dir),
+            solver_type="lsqr",
+            nt_out=5,
+            n_proc=1,
+            n_min=2,
+            no_weights=True,
+        )
+
+    for key in ("full", "secular", "seasonal", "transient", "sigma"):
+        from_file = _read_stack_variable(file_dir / ("interp_output_%s.h5" % key))
+        from_instance = _read_stack_variable(instance_dir / ("interp_output_%s.h5" % key))
+        np.testing.assert_allclose(from_instance, from_file, equal_nan=True)
+
+
+def test_solver_uses_model_regularization_indices_for_bsplines():
+    solver = _solver_module()
+    tdec = np.linspace(2020.0, 2021.0, 8)
+    model = solver.build_temporal_model(
+        tdec, poly=1, bsplines=[4], isplines=[4], periods=[]
+    )
+
+    reg_indices = solver._regularization_indices(model)
+
+    assert len(model.reg_indices) > len(model.itransient)
+    assert np.array_equal(reg_indices, model.reg_indices)
 
 
 def test_solver_inversion_points_joblib_matches_serial(tmp_path):
