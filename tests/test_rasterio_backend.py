@@ -564,3 +564,21 @@ def test_ice_explore_stack_parses_extra_dimension_indexers():
         module.parse_indexer("=0")
     with pytest.raises(argparse.ArgumentTypeError):
         module.parse_indexer("band=first")
+
+
+def test_ice_view_stack_mean_parses_extra_dimension_indexers():
+    module = _load_bin_script("ice_view_stack_mean.py")
+
+    assert module.parse_indexer("band=0") == ("band", 0)
+    assert module.parse_indexer("component=12") == ("component", 12)
+    assert module.indexer_dict([("band", 1), ("component", 2)]) == {
+        "band": 1,
+        "component": 2,
+    }
+
+    with pytest.raises(argparse.ArgumentTypeError):
+        module.parse_indexer("band")
+    with pytest.raises(argparse.ArgumentTypeError):
+        module.parse_indexer("=0")
+    with pytest.raises(argparse.ArgumentTypeError):
+        module.parse_indexer("band=first")
