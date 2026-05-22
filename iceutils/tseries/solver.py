@@ -8,13 +8,229 @@ import h5py
 import copy
 import sys
 import os
+from joblib import Parallel, delayed
 
 from ..constants import *
 from ..raster import get_chunks
 from ..stack import Stack
-from .. import pymp
 from .LinearRegression import *
 from .model import build_temporal_model, build_temporal_model_fromfile
+
+_INVERSION_KEYS = ('full', 'secular', 'seasonal', 'transient', 'sigma')
+_PREDICTION_KEYS = ('full', 'secular', 'seasonal', 'transient')
+
+
+def _normalize_n_proc(n_proc):
+    """
+    Return a positive process count for user-facing n_proc values.
+    """
+    if n_proc is None:
+        return 1
+    return max(1, int(n_proc))
+
+
+def _index_blocks(n_items, n_proc):
+    """
+    Split item indices into deterministic blocks for parallel workers.
+    """
+    n_items = int(n_items)
+    if n_items < 1:
+        return []
+
+    n_jobs = min(_normalize_n_proc(n_proc), n_items)
+    n_blocks = 1 if n_jobs == 1 else min(n_items, n_jobs * 4)
+    edges = np.linspace(0, n_items, n_blocks + 1, dtype=int)
+    return [
+        (int(edges[index]), int(edges[index + 1]))
+        for index in range(n_blocks)
+        if edges[index] < edges[index + 1]
+    ]
+
+
+def _run_parallel_blocks(func, blocks, n_proc, *args):
+    """
+    Run block workers serially or with joblib depending on n_proc.
+    """
+    if len(blocks) < 1:
+        return []
+
+    n_jobs = min(_normalize_n_proc(n_proc), len(blocks))
+    if n_jobs == 1:
+        return [func(start, stop, *args) for start, stop in blocks]
+
+    return Parallel(n_jobs=n_jobs, backend='loky')(
+        delayed(func)(start, stop, *args) for start, stop in blocks
+    )
+
+
+def _solver_config(solver_type, reg_indices=None, rw_iter=1, regMat=None,
+                   robust=False, penalty=1.0, n_nonzero_coefs=10, n_min=20):
+    """
+    Return serializable solver configuration for joblib workers.
+    """
+    return {
+        'solver_type': solver_type,
+        'reg_indices': reg_indices,
+        'rw_iter': rw_iter,
+        'regMat': regMat,
+        'robust': robust,
+        'penalty': penalty,
+        'n_nonzero_coefs': n_nonzero_coefs,
+        'n_min': n_min,
+    }
+
+
+def _model_prediction_spec(model):
+    """
+    Return the array-only pieces needed for model prediction in workers.
+    """
+    return {
+        'G': np.asarray(model.G),
+        'secular': np.asarray(model.isecular, dtype=int),
+        'seasonal': np.asarray(model.iseasonal, dtype=int),
+        'transient': np.asarray(model.itransient, dtype=int),
+        'step': np.asarray(model.istep, dtype=int),
+    }
+
+
+def _predict_model_parts(model_spec, m):
+    """
+    Predict model components from an array-only model spec.
+    """
+    G = model_spec['G']
+    results = {}
+    for key in ('secular', 'seasonal', 'transient', 'step'):
+        indices = model_spec[key]
+        if indices.size:
+            results[key] = np.dot(G[:, indices], m[indices])
+        else:
+            results[key] = np.zeros((G.shape[0],), dtype=np.float64)
+
+    results['full'] = (
+        results['secular'] + results['seasonal'] +
+        results['transient'] + results['step']
+    )
+    return results
+
+
+def _prediction_sigma(model_spec, Cm):
+    """
+    Compute prediction uncertainty from an array-only model spec.
+    """
+    G = model_spec['G']
+    return np.sqrt(np.diag(np.dot(G, np.dot(Cm, G.T))))
+
+
+def _iterate_lsqr_arrays(solver, G, d, w, n_iter=5, n_std=3.0):
+    """
+    Iterative least squares using only arrays for worker-side execution.
+    """
+    for iternum in range(n_iter):
+
+        # Fit
+        status, m, Cm = solver.invert(G, d, wgt=w)
+        if status == FAIL:
+            return status, None, None
+
+        # Compute outliers against the full prediction.
+        misfit = d - np.dot(G, m)
+        std = np.nanstd(misfit)
+        outliers = (np.abs(misfit) > (n_std * std)).nonzero()[0]
+        if len(outliers) < 1:
+            break
+        d[outliers] = np.nan
+        w[outliers] = np.nan
+
+    return SUCCESS, m, Cm
+
+
+def _invert_pixel_block(start, stop, data, wgts, solver_config, G,
+                        output_model_spec, n_iter, n_std, return_cleaned):
+    """
+    Invert a contiguous block of flattened grid pixels.
+    """
+    solver = select_solver(**solver_config)
+    block_len = stop - start
+    nt_out = output_model_spec['G'].shape[0]
+    results = {
+        key: np.full((nt_out, block_len), np.nan, dtype=np.float32)
+        for key in _INVERSION_KEYS
+    }
+    clean_data = None
+    clean_wgts = None
+    if return_cleaned:
+        clean_data = np.empty((data.shape[0], block_len), dtype=np.float32)
+        clean_wgts = np.empty((wgts.shape[0], block_len), dtype=np.float32)
+
+    for offset, index in enumerate(range(start, stop)):
+
+        # Work on private copies because outlier removal mutates d and w.
+        d = np.array(data[:, index], dtype=np.float64, copy=True)
+        w = np.array(wgts[:, index], dtype=np.float64, copy=True)
+
+        status, m, Cm = _iterate_lsqr_arrays(
+            solver, G, d, w, n_iter=n_iter, n_std=n_std,
+        )
+        if return_cleaned:
+            clean_data[:, offset] = d
+            clean_wgts[:, offset] = w
+
+        if status == FAIL:
+            continue
+
+        pred = _predict_model_parts(output_model_spec, m)
+        for key in _PREDICTION_KEYS:
+            results[key][:, offset] = pred[key]
+        results['sigma'][:, offset] = _prediction_sigma(output_model_spec, Cm)
+
+    return start, stop, results, clean_data, clean_wgts
+
+
+def _invert_point_block(start, stop, data, wgts, solver_config, G, output_model_spec):
+    """
+    Invert a contiguous block of point time series.
+    """
+    solver = select_solver(**solver_config)
+    block_len = stop - start
+    nt_out = output_model_spec['G'].shape[0]
+    results = {
+        key: np.zeros((block_len, nt_out), dtype=np.float32)
+        for key in _INVERSION_KEYS
+    }
+
+    for offset, index in enumerate(range(start, stop)):
+
+        d = np.array(data[:, index], dtype=np.float64, copy=True)
+        w = np.array(wgts[:, index], dtype=np.float64, copy=True)
+
+        status, m, Cm = solver.invert(G, d, wgt=w)
+        if status == FAIL:
+            continue
+
+        pred = _predict_model_parts(output_model_spec, m)
+        for key in _PREDICTION_KEYS:
+            results[key][offset, :] = pred[key]
+        results['sigma'][offset, :] = _prediction_sigma(output_model_spec, Cm)
+
+    return start, stop, results
+
+
+def _filter_pixel_block(start, stop, data, a, b):
+    """
+    Butterworth-filter a contiguous block of flattened grid pixels.
+    """
+    block_len = stop - start
+    long_term = np.empty((data.shape[0], block_len), dtype=np.float32)
+    short_term = np.empty((data.shape[0], block_len), dtype=np.float32)
+
+    for offset, index in enumerate(range(start, stop)):
+        d = data[:, index]
+        d_filt = signal.filtfilt(b, a, d)
+        long_term[:, offset] = d_filt
+        short_term[:, offset] = d - d_filt
+
+    return start, stop, long_term, short_term
+
 
 def _stack_chunk_array(stack, islice, jslice, key='data'):
     """
@@ -73,10 +289,12 @@ def inversion(stack, userfile, outdir, cleaned_stack=None,
     else:
         mask = np.ones((stack.Ny, stack.Nx), dtype=bool)
 
-    # Instantiate a solver
-    solver = select_solver(solver_type, reg_indices=model.itransient, rw_iter=rw_iter,
-                           regMat=regMat, robust=robust, penalty=regParam,
-                           n_nonzero_coefs=n_nonzero_coefs, n_min=n_min)
+    # Cache serializable worker configuration.
+    solver_cfg = _solver_config(solver_type, reg_indices=model.itransient,
+                                rw_iter=rw_iter, regMat=regMat, robust=robust,
+                                penalty=regParam,
+                                n_nonzero_coefs=n_nonzero_coefs, n_min=n_min)
+    output_model_spec = _model_prediction_spec(model)
 
     # Get list of chunks
     try:
@@ -111,47 +329,31 @@ def inversion(stack, userfile, outdir, cleaned_stack=None,
         _, chunk_ny, chunk_nx = data2d.shape
         npix = data1d.shape[1]
 
-        # Transfer to shared arrays
-        manager = pymp.Manager()
-        data = pymp.array(data1d.shape, dtype=np.float32)
-        wgts = pymp.array(wgts1d.shape, dtype=np.float32)
-        data[:, :] = data1d
-        wgts[:, :] = wgts1d
+        # Convert chunk data once for worker-side numerical work.
+        data = np.asarray(data1d, dtype=np.float32)
+        wgts = np.asarray(wgts1d, dtype=np.float32)
 
-        # Create shared arrays for results
+        # Create arrays for results
         shape = (len(tfit), npix)
         results = {}
-        for key in ('full', 'secular', 'seasonal', 'transient', 'sigma'):
-            results[key] = pymp.full(shape, np.nan, dtype=np.float32)
+        for key in _INVERSION_KEYS:
+            results[key] = np.full(shape, np.nan, dtype=np.float32)
 
-        # Loop over pixels in chunk in parallel
-        with pymp.Parallel(n_proc, manager) as parallel:
-            for index in parallel.range(npix):
-
-                # Get pixel data
-                d = data[:, index]
-                w = wgts[:, index]
-                
-                # Perform inversion: iterative least squares with outlier detection
-                # Outliers are set to NaN in-place
-                status, m, Cm = iterate_lsqr(
-                    solver, data_model, G, d, w, n_iter=n_iter, n_std=n_std,
-                )
-                # Check if least squares failed
-                if status == FAIL:
-                    continue
-
-                # Compute prediction and store in arrays
-                pred = model.predict(m, sigma=False)
-                for key in ('full', 'secular', 'seasonal', 'transient'):
-                    results[key][:,index] = pred[key]
-
-                # Compute data prediction sigma manually
-                sigmaval = np.sqrt(np.diag(np.dot(model.G, np.dot(Cm, model.G.T))))
-                results['sigma'][:,index] = sigmaval
+        # Loop over pixel blocks in parallel.
+        blocks = _index_blocks(npix, n_proc)
+        block_results = _run_parallel_blocks(
+            _invert_pixel_block, blocks, n_proc, data, wgts, solver_cfg, G,
+            output_model_spec, n_iter, n_std, cleaned_stack is not None
+        )
+        for start, stop, block, clean_data, clean_wgts in block_results:
+            for key in _INVERSION_KEYS:
+                results[key][:, start:stop] = block[key]
+            if cleaned_stack is not None:
+                data[:, start:stop] = clean_data
+                wgts[:, start:stop] = clean_wgts
 
         # Save results in output stacks
-        for key in ('full', 'secular', 'seasonal', 'transient', 'sigma'):
+        for key in _INVERSION_KEYS:
             rdata = np.zeros((len(tfit), chunk_ny, chunk_nx), dtype=np.float32)
             rdata[:, chunk_mask] = results[key]
             ostacks[key].set_chunk(islice, jslice, rdata)
@@ -207,50 +409,47 @@ def inversion_points(stack, userfile, x, y, solver_type='lsqr',
     assert len(y) == n_pts, 'Mismatch in sizes of input points'
 
     # Create a time series model defined at the data points
-    model, Cm = build_temporal_model(stack.tdec, userfile, cov=True)
+    data_model, Cm = build_temporal_model_fromfile(stack.tdec, userfile, cov=True)
     regMat = np.linalg.inv(Cm)
     # Cache the design matrix
-    G = model.G.copy()
+    G = data_model.G.copy()
 
     # Create a time series model defined at equally spaced time points
     tfit = np.linspace(stack.tdec[0], stack.tdec[-1], nt_out)
-    model = build_temporal_model(tfit, userfile, cov=False)
+    model = build_temporal_model_fromfile(tfit, userfile, cov=False)
 
-    # Instantiate a solver
-    solver = select_solver(solver_type, reg_indices=model.itransient, rw_iter=rw_iter,
-                           regMat=regMat, robust=robust, penalty=regParam,
-                           n_nonzero_coefs=n_nonzero_coefs, n_min=n_min)
+    # Cache serializable worker configuration.
+    solver_cfg = _solver_config(solver_type, reg_indices=model.itransient,
+                                rw_iter=rw_iter, regMat=regMat, robust=robust,
+                                penalty=regParam,
+                                n_nonzero_coefs=n_nonzero_coefs, n_min=n_min)
+    output_model_spec = _model_prediction_spec(model)
     
-    # Create shared arrays for results
-    manager = pymp.Manager()
+    # Load point time series in the parent process before launching workers.
+    data = np.full((stack.Nt, n_pts), np.nan, dtype=np.float32)
+    wgts = np.full((stack.Nt, n_pts), np.nan, dtype=np.float32)
+    for index in range(n_pts):
+        d = stack.timeseries(xy=(x[index], y[index]))
+        if d is None:
+            continue
+        data[:, index] = d
+        wgts[:, index] = stack.timeseries(xy=(x[index], y[index]), key='weights')
+
+    # Create arrays for results
     shape = (n_pts, len(tfit))
     results = {'tdec': tfit}
-    for key in ('full', 'secular', 'seasonal', 'transient', 'sigma'):
-        results[key] = pymp.array(shape, dtype=np.float32)
+    for key in _INVERSION_KEYS:
+        results[key] = np.zeros(shape, dtype=np.float32)
 
-    # Loop over pixels in chunk in parallel
-    with pymp.Parallel(n_proc, manager) as parallel:
-        for index in parallel.range(n_pts):
-
-            # Get time series
-            d = stack.timeseries(xy=(x[index], y[index]))
-            w = stack.timeseries(xy=(x[index], y[index]), key='weights')
-            if d is None:
-                continue
-
-            # Perform inversion
-            status, m, Cm = solver.invert(G, d, wgt=w)
-            if status == FAIL:
-                continue
-
-            # Compute prediction and store in arrays
-            pred = model.predict(m, sigma=False)
-            for key in ('full', 'secular', 'seasonal', 'transient'):
-                results[key][index,:] = pred[key]
-
-            # Compute data prediction sigma manually
-            sigmaval = np.sqrt(np.diag(np.dot(model.G, np.dot(Cm, model.G.T))))
-            results['sigma'][index,:] = sigmaval
+    # Loop over point blocks in parallel.
+    blocks = _index_blocks(n_pts, n_proc)
+    block_results = _run_parallel_blocks(
+        _invert_point_block, blocks, n_proc, data, wgts, solver_cfg, G,
+        output_model_spec
+    )
+    for start, stop, block in block_results:
+        for key in _INVERSION_KEYS:
+            results[key][start:stop, :] = block[key]
 
     # All done
     return results
@@ -277,27 +476,22 @@ def butterworth(stack, a, b, fname_long, fname_short, n_proc=1):
         _, chunk_ny, chunk_nx = data.shape
         npix = chunk_ny * chunk_nx
 
-        # Create shared arrays for results
-        manager = pymp.Manager()
-        shape = (stack.Nt, chunk_ny, chunk_nx)
-        results = {}
-        for key in ('long_term', 'short_term'):
-            results[key] = pymp.array(shape, dtype=np.float32)
+        # Loop over flattened pixel blocks in parallel.
+        data1d = np.asarray(data.reshape(stack.Nt, npix), dtype=np.float32)
+        long_term = np.empty((stack.Nt, npix), dtype=np.float32)
+        short_term = np.empty((stack.Nt, npix), dtype=np.float32)
+        blocks = _index_blocks(npix, n_proc)
+        block_results = _run_parallel_blocks(
+            _filter_pixel_block, blocks, n_proc, data1d, a, b
+        )
+        for start, stop, block_long, block_short in block_results:
+            long_term[:, start:stop] = block_long
+            short_term[:, start:stop] = block_short
 
-        # Loop over pixels in chunk in parallel
-        with pymp.Parallel(n_proc, manager) as parallel:
-            for index in parallel.range(npix):
-
-                # Get time series
-                i, j = np.unravel_index(index, (chunk_ny, chunk_nx))
-                d = data[:,i,j]
-
-                # Perform Butterworth filtering
-                d_filt = signal.filtfilt(b, a, d)
-
-                # Save results
-                results['long_term'][:,i,j] = d_filt
-                results['short_term'][:,i,j] = d - d_filt
+        results = {
+            'long_term': long_term.reshape(stack.Nt, chunk_ny, chunk_nx),
+            'short_term': short_term.reshape(stack.Nt, chunk_ny, chunk_nx),
+        }
 
         # Save results in output stack
         for key, ostack in (('long_term', long_stack), ('short_term', short_stack)):
