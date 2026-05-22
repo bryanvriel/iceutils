@@ -14,6 +14,22 @@ import iceutils as ice
 
 plt.rc('font', size=12)
 
+def parse_indexer(value):
+    try:
+        dim, index = value.split('=', 1)
+    except ValueError:
+        raise argparse.ArgumentTypeError('Indexers must use DIM=INDEX syntax.')
+    if not dim:
+        raise argparse.ArgumentTypeError('Indexer dimension cannot be empty.')
+    try:
+        index = int(index)
+    except ValueError:
+        raise argparse.ArgumentTypeError('Indexer value must be an integer.')
+    return dim, index
+
+def indexer_dict(values):
+    return dict(values or [])
+
 def parse():
     parser = argparse.ArgumentParser(description="""
         Explore time series tack""")
@@ -21,12 +37,16 @@ def parse():
         help='Input stack file to display.')
     parser.add_argument('-key', action='store', type=str, default='data',
         help='Dataset to view. Default: data.')
+    parser.add_argument('-isel', action='append', type=parse_indexer, default=[],
+        help='Select extra stack dimension by zero-based index as DIM=INDEX.')
     parser.add_argument('-time_key', action='store', type=str, default='tdec',
         help='Key for time vector. Default: tdec.')
     parser.add_argument('-mfile', action='store', type=str, default=None,
         help='Model stack file. Default: None.')
     parser.add_argument('-mkey', action='store', type=str, default='data',
         help='Model dataset view. Default: data.')
+    parser.add_argument('-misel', action='append', type=parse_indexer, default=[],
+        help='Select extra model stack dimension by zero-based index as DIM=INDEX.')
     parser.add_argument('-mstyle', action='store', type=str, default='o',
         help='Model dataset plot style. Default: o.')
     parser.add_argument('-mtdec', action='store', type=str, default='tdec',
@@ -53,7 +73,8 @@ def parse():
 def main(args):
 
     # Load the stack
-    stack = ice.Stack(args.stackfile, ds_hdr=args.key, time_key=args.time_key)
+    stack = ice.Stack(args.stackfile, ds_hdr=args.key, time_key=args.time_key,
+                      indexers=indexer_dict(args.isel))
 
     # Get frame
     if args.frame == 'initial':
@@ -90,7 +111,8 @@ def main(args):
     # If model directory is given, load model stack (full fit)
     mstack = None
     if args.mfile is not None:
-        mstack = ice.Stack(args.mfile, ds_hdr=args.mkey)
+        mstack = ice.Stack(args.mfile, ds_hdr=args.mkey,
+                           indexers=indexer_dict(args.misel))
         # Load correct time array
         if args.mtdec != 'tdec':
             mtdec = mstack[args.mtdec].values

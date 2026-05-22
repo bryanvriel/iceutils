@@ -258,6 +258,24 @@ frame = velocity.sel(time='2020-01-01', method='nearest').values
 
 For external NetCDF files, `Stack` expects coordinates/dimensions named `time`, `y`, and `x`. If a file uses names like `lat`/`lon` or a different data variable name, rename with `xarray` first or access the matching variable key from `stack.ds`.
 
+If an external NetCDF variable has an extra dimension, such as `VelocityMap(time, band, y, x)`,
+select the extra dimension with zero-based xarray-style indexers:
+
+```python
+stack = ice.Stack('GrIMPSubset.NSIDC-0646.nc', indexers={'band': 0})
+
+# Use the original variable name from the NetCDF file
+velocity = stack['VelocityMap']
+frame = stack.slice(0, key='VelocityMap')
+data = stack.timeseries(coord=(300, 400), key='VelocityMap')
+```
+
+The same file can be explored interactively with:
+
+```bash
+ice_explore_stack.py GrIMPSubset.NSIDC-0646.nc -key VelocityMap -isel band=0
+```
+
 ### Extract time series at a given point
 
 A common action performed on stacks is extracting the 1D time series at a given geographic coordinate:
