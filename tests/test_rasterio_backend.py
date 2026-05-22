@@ -95,6 +95,32 @@ def _solver_module():
     return solver
 
 
+def _write_linear_user_model(path):
+    path.write_text(
+        "\n".join(
+            [
+                "import numpy as np",
+                "from iceutils.tseries import timefn",
+                "",
+                "def build(dates, **kwargs):",
+                "    collection = timefn.TimefnCollection()",
+                "    collection.append(timefn.fnmap['poly'](tref=dates[0], order=1, units='years'))",
+                "    return collection",
+                "",
+                "def computeCm(collection, **kwargs):",
+                "    return np.eye(len(collection), dtype=float)",
+                "",
+            ]
+        )
+    )
+    return str(path)
+
+
+def _read_stack_variable(path, key="data"):
+    with Stack(str(path)) as stack:
+        return np.asarray(stack[key].values).copy()
+
+
 def _xarray_storage_type_names(data_array):
     names = []
     obj = data_array.variable._data
@@ -495,6 +521,129 @@ def test_solver_chunk_flattening_reads_legacy_hwn_as_canonical(tmp_path):
     assert np.array_equal(chunk_mask, expected_mask)
     assert np.array_equal(data1d, expected_data[:, expected_mask])
     assert np.array_equal(wgts1d, expected_weights[:, expected_mask])
+
+
+def test_solver_inversion_joblib_matches_serial_with_cleaned_stack(tmp_path):
+    solver = _solver_module()
+    userfile = _write_linear_user_model(tmp_path / "linear_model.py")
+    stack_path = tmp_path / "invert_stack.h5"
+    serial_dir = tmp_path / "serial"
+    parallel_dir = tmp_path / "parallel"
+    serial_dir.mkdir()
+    parallel_dir.mkdir()
+
+    time = np.arange(6, dtype=np.float32)[:, None, None]
+    rows, cols = np.indices((2, 3), dtype=np.float32)
+    data = 1.0 + 0.25 * time + 0.5 * rows + 0.1 * cols
+    data = data.astype(np.float32)
+    data[3, 1, 2] += 5.0
+    _write_stack(stack_path, data)
+
+    with Stack(str(stack_path)) as stack:
+        solver.inversion(
+            stack,
+            userfile,
+            str(serial_dir),
+            cleaned_stack="cleaned.h5",
+            solver_type="lsqr",
+            nt_out=5,
+            n_proc=1,
+            n_min=2,
+            n_iter=2,
+            n_std=1.5,
+            no_weights=True,
+            prior_cov=False,
+        )
+
+    with Stack(str(stack_path)) as stack:
+        solver.inversion(
+            stack,
+            userfile,
+            str(parallel_dir),
+            cleaned_stack="cleaned.h5",
+            solver_type="lsqr",
+            nt_out=5,
+            n_proc=2,
+            n_min=2,
+            n_iter=2,
+            n_std=1.5,
+            no_weights=True,
+            prior_cov=False,
+        )
+
+    for key in ("full", "secular", "seasonal", "transient", "sigma"):
+        serial = _read_stack_variable(serial_dir / ("interp_output_%s.h5" % key))
+        parallel = _read_stack_variable(parallel_dir / ("interp_output_%s.h5" % key))
+        np.testing.assert_allclose(parallel, serial, equal_nan=True)
+
+    for key in ("data", "weights"):
+        serial = _read_stack_variable(serial_dir / "cleaned.h5", key=key)
+        parallel = _read_stack_variable(parallel_dir / "cleaned.h5", key=key)
+        np.testing.assert_allclose(parallel, serial, equal_nan=True)
+
+
+def test_solver_inversion_points_joblib_matches_serial(tmp_path):
+    solver = _solver_module()
+    userfile = _write_linear_user_model(tmp_path / "linear_model.py")
+    stack_path = tmp_path / "points_stack.h5"
+
+    time = np.arange(6, dtype=np.float32)[:, None, None]
+    rows, cols = np.indices((2, 3), dtype=np.float32)
+    data = 2.0 + 0.5 * time + rows + 0.2 * cols
+    weights = np.ones_like(data, dtype=np.float32)
+    _write_stack(stack_path, data.astype(np.float32), weights=weights)
+
+    hdr = _stack_hdr((2, 3))
+    x0, y0 = hdr.imagecoord_to_xy(0, 0)
+    x1, y1 = hdr.imagecoord_to_xy(1, 2)
+
+    with Stack(str(stack_path)) as stack:
+        serial = solver.inversion_points(
+            stack, userfile, [x0, x1], [y0, y1],
+            solver_type="lsqr", nt_out=5, n_proc=1, n_min=2,
+        )
+
+    with Stack(str(stack_path)) as stack:
+        parallel = solver.inversion_points(
+            stack, userfile, [x0, x1], [y0, y1],
+            solver_type="lsqr", nt_out=5, n_proc=2, n_min=2,
+        )
+
+    for key in ("tdec", "full", "secular", "seasonal", "transient", "sigma"):
+        np.testing.assert_allclose(parallel[key], serial[key], equal_nan=True)
+
+
+def test_solver_butterworth_joblib_matches_serial(tmp_path):
+    solver = _solver_module()
+    stack_path = tmp_path / "butter_stack.h5"
+    serial_long = tmp_path / "serial_long.h5"
+    serial_short = tmp_path / "serial_short.h5"
+    parallel_long = tmp_path / "parallel_long.h5"
+    parallel_short = tmp_path / "parallel_short.h5"
+
+    time = np.linspace(0.0, 4.0 * np.pi, 24, dtype=np.float32)[:, None, None]
+    rows, cols = np.indices((2, 3), dtype=np.float32)
+    data = np.sin(time) + 0.1 * np.cos(4.0 * time) + 0.25 * rows + 0.1 * cols
+    _write_stack(stack_path, data.astype(np.float32))
+
+    b, a = solver.butterworth_coeffs(frequency=0.2, dt=1.0, order=1)
+
+    with Stack(str(stack_path)) as stack:
+        solver.butterworth(stack, a, b, str(serial_long), str(serial_short), n_proc=1)
+
+    with Stack(str(stack_path)) as stack:
+        solver.butterworth(stack, a, b, str(parallel_long), str(parallel_short), n_proc=2)
+
+    np.testing.assert_allclose(
+        _read_stack_variable(parallel_long),
+        _read_stack_variable(serial_long),
+        rtol=1.0e-6,
+    )
+    np.testing.assert_allclose(
+        _read_stack_variable(parallel_short),
+        _read_stack_variable(serial_short),
+        rtol=1.0e-6,
+    )
 
 
 @pytest.mark.parametrize(
