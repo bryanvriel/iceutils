@@ -15,6 +15,8 @@ def parse():
         help='Input raster to render.')
     parser.add_argument('-b', action='store', type=int, default=1, dest='band',
         help='Raster band. Default: 1.')
+    parser.add_argument('-s_epsg', action='store', type=int, default=None,
+        help='Force source EPSG code.')
     parser.add_argument('--dims', action='store', type=int, nargs=2, default=[None, None],
         help='Dimensions for raster warped to EPSG:4326. Default preserves dimensions.')
     parser.add_argument('-cmap', action='store', type=str, default='turbo',
@@ -33,6 +35,8 @@ def main(args):
 
     # Load the raster
     r = ice.Raster(args.rasterfile, band=args.band)
+    if args.s_epsg is not None:
+        r.hdr._epsg = args.s_epsg
 
     # Do warping if necessary
     if r.hdr.epsg != 4326:
