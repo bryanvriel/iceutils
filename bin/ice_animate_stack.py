@@ -9,6 +9,28 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 import iceutils as ice
 
+def parse_indexer(value):
+    try:
+        dim, index = value.split('=', 1)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            'Indexers must be provided as DIM=INDEX'
+        ) from exc
+    if not dim:
+        raise argparse.ArgumentTypeError(
+            'Indexer dimension cannot be empty'
+        )
+    try:
+        index = int(index)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            'Indexer index must be an integer'
+        ) from exc
+    return dim, index
+
+def indexer_dict(values):
+    return dict(values or [])
+
 def parse():
     """ Parse command line args for script """
     parser = argparse.ArgumentParser(description='Render an animated representation of the Stack.')
@@ -34,6 +56,9 @@ def parse():
         help='Aspect of figure. Default: equal.')
     parser.add_argument('-fps', '--fps', action='store', type=int, default=5, 
         help='Frames per second for the animation. Default: 5.')
+    parser.add_argument('-isel', action='append', type=parse_indexer, default=[],
+        metavar='DIM=INDEX',
+        help='Select an extra stack dimension by zero-based index.')
     parser.add_argument('-k', '-key', '--key', action='store', type=str, default='data', 
         help='Dataset to view. Default: data.')
     parser.add_argument('-r', '-ref', '--ref', action='store', type=str, default=None,
@@ -54,7 +79,7 @@ def parse():
 
 def main(args):
     # Load Stack
-    stack = ice.Stack(args.stackfile)
+    stack = ice.Stack(args.stackfile, indexers=indexer_dict(args.isel))
     
     # Load reference SAR image
     if args.ref is not None:
