@@ -106,7 +106,7 @@ def main(args):
         tlabel = 'Index'
     else:
         tdec = stack.tdec
-        tlabel = 'Year'
+        tlabel = 'Year' if stack.time_is_calendar else (stack.time_units or 'Time')
     
     # If model directory is given, load model stack (full fit)
     mstack = None

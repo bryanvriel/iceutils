@@ -17,6 +17,38 @@ from .raster import Raster, RasterInfo
 TIME_UNITS = 'seconds since 1970-01-01 00:00:00'
 TIME_CALENDAR = 'proleptic_gregorian'
 EPOCH = np.datetime64('1970-01-01T00:00:00', 'ns')
+DECIMAL_YEAR_UNITS = 'decimal_year'
+
+
+def _decode_attr(value):
+    if isinstance(value, bytes):
+        return value.decode('utf-8')
+    return value
+
+
+def _normalize_time_units(units):
+    units = _decode_attr(units)
+    if units is None:
+        return None
+    units = str(units).strip()
+    aliases = {
+        'decimal years': DECIMAL_YEAR_UNITS,
+        'decimal year': DECIMAL_YEAR_UNITS,
+        'decimal_years': DECIMAL_YEAR_UNITS,
+        'decimal_year': DECIMAL_YEAR_UNITS,
+        'tdec': DECIMAL_YEAR_UNITS,
+    }
+    return aliases.get(units.lower(), units)
+
+
+def _is_calendar_units(units):
+    units = _normalize_time_units(units)
+    return units is not None and ' since ' in units.lower()
+
+
+def _is_plain_numeric_units(units):
+    units = _normalize_time_units(units)
+    return units is not None and units != DECIMAL_YEAR_UNITS and not _is_calendar_units(units)
 
 
 def _is_datetime_like(value):
@@ -69,16 +101,75 @@ def _datetime64_to_tdec(time):
     return years.astype(float) + elapsed / span
 
 
+def _calendar_units_to_datetime64(values, units):
+    """
+    Convert simple CF-style numeric time values to datetime64.
+    """
+    units = _normalize_time_units(units)
+    if units is not None and units.startswith('seconds since 1970-01-01'):
+        return _seconds_since_epoch_to_datetime64(values)
+
+    unit, origin = units.split(' since ', 1)
+    unit = unit.strip().lower()
+    origin = origin.strip()
+    if origin.endswith(' UTC'):
+        origin = origin[:-4]
+
+    scale = {
+        'second': 1.0e9,
+        'seconds': 1.0e9,
+        'sec': 1.0e9,
+        'secs': 1.0e9,
+        's': 1.0e9,
+        'minute': 60.0e9,
+        'minutes': 60.0e9,
+        'min': 60.0e9,
+        'mins': 60.0e9,
+        'hour': 3600.0e9,
+        'hours': 3600.0e9,
+        'hr': 3600.0e9,
+        'hrs': 3600.0e9,
+        'day': 86400.0e9,
+        'days': 86400.0e9,
+        'd': 86400.0e9,
+    }.get(unit)
+    if scale is None:
+        raise ValueError('Unsupported calendar time unit: %s' % units)
+
+    arr = np.asarray(values)
+    if np.any(~np.isfinite(arr.astype(float))):
+        raise ValueError('Time coordinate contains non-finite values.')
+
+    nanoseconds = np.rint(arr.astype(float) * scale).astype(np.int64)
+    return np.datetime64(origin, 'ns') + nanoseconds.astype('timedelta64[ns]')
+
+
 def _time_values_to_datetime64(values, units=None):
     """
     Normalize supported time encodings to datetime64.
     """
     arr = np.asarray(values)
+    units = _normalize_time_units(units)
     if np.issubdtype(arr.dtype, np.datetime64):
         return arr.astype('datetime64[ns]')
-    if units is not None and units.startswith('seconds since 1970-01-01'):
-        return _seconds_since_epoch_to_datetime64(arr)
+    if _is_calendar_units(units):
+        return _calendar_units_to_datetime64(arr, units)
     return _tdec_to_datetime64(arr)
+
+
+def _time_values_to_coordinate(values, units=None):
+    """
+    Normalize file time values to either datetime64 or native numeric values.
+    """
+    units = _normalize_time_units(units)
+    arr = np.asarray(values)
+    if np.issubdtype(arr.dtype, np.datetime64):
+        return arr.astype('datetime64[ns]'), units or TIME_UNITS
+    if _is_plain_numeric_units(units):
+        return arr, units
+    if _is_calendar_units(units):
+        return _time_values_to_datetime64(arr, units=units), units
+    return _tdec_to_datetime64(arr), DECIMAL_YEAR_UNITS
 
 
 def _seconds_since_epoch_to_datetime64(values):
@@ -124,7 +215,7 @@ class Stack:
     def __init__(self, filename, mode='r', fmt='NHW',
                  init_stack=None, init_tdec=None, init_rasterinfo=None,
                  init_names=None, init_data=False, ds_hdr=None, time_key='tdec',
-                 indexers=None):
+                 indexers=None, time_units=None):
         """Reads Stack from an existing file or creates a new Stack.
 
         New files are NetCDF-compatible HDF5 files with xarray dimensions
@@ -146,6 +237,7 @@ class Stack:
         self._time_key = time_key
         self._ds_hdr = ds_hdr
         self._indexers = self._normalize_indexers(indexers)
+        self._time_units_override = _normalize_time_units(time_units)
 
         if mode in ('r', 'r+') or (mode == 'a' and os.path.exists(filename)):
             self._open_existing(ds_hdr=ds_hdr, time_key=time_key)
@@ -173,15 +265,36 @@ class Stack:
         h5_mode = 'w' if mode == 'w' else mode
         self.fid = h5netcdf.File(self.filename, h5_mode)
 
+    def _normalize_dataset_time(self, ds):
+        if 'time' not in ds.coords:
+            return ds
+
+        units = self._time_units_override
+        if units is None:
+            units = self._time_units_from_dataarray(ds['time'])
+            units = units or _normalize_time_units(ds.attrs.get('time_units'))
+        if units is None:
+            units = TIME_UNITS if np.issubdtype(ds['time'].dtype, np.datetime64) else None
+
+        if self._time_units_override is not None:
+            time, units = _time_values_to_coordinate(ds['time'].values, units=units)
+            ds = ds.assign_coords(time=('time', time))
+
+        if units is not None:
+            ds['time'].attrs['units'] = units
+            ds.attrs['time_units'] = units
+        return ds
+
     def _open_existing(self, ds_hdr=None, time_key='tdec'):
+        decode_times = self._time_units_override is None
         try:
-            ds = xr.open_dataset(self.filename, engine='h5netcdf', decode_times=True,
+            ds = xr.open_dataset(self.filename, engine='h5netcdf', decode_times=decode_times,
                                  phony_dims='sort')
             if {'time', 'y', 'x'}.issubset(ds.sizes):
-                self.ds = ds
+                self.ds = self._normalize_dataset_time(ds)
                 self.original_fmt = ds.attrs.get('original_format', ds.attrs.get('format', 'NHW'))
                 self.fmt = 'NHW'
-                self.hdr = self._rasterinfo_from_dataset(ds)
+                self.hdr = self._rasterinfo_from_dataset(self.ds)
                 self._update_dataset_cache()
                 return
             ds.close()
@@ -208,8 +321,12 @@ class Stack:
                 self.original_fmt = self.original_fmt.decode('utf-8')
 
             x, y = self._read_legacy_xy(fid, ds_hdr)
-            time = self._read_legacy_time(fid, time_key)
-            coords = {'time': ('time', time), 'y': ('y', y), 'x': ('x', x)}
+            time, time_units = self._read_legacy_time(fid, time_key)
+            coords = {
+                'time': ('time', time, {'units': time_units}),
+                'y': ('y', y),
+                'x': ('x', x),
+            }
 
             for key, value in self._iter_hdf5_datasets(fid):
                 if key in ('x', 'X', 'y', 'Y', time_key, 'tdec', 't', 'time'):
@@ -246,7 +363,7 @@ class Stack:
             attrs = dict(fid.attrs)
             attrs['original_format'] = self.original_fmt
             attrs['format'] = 'xarray'
-            attrs.setdefault('time_units', TIME_UNITS)
+            attrs['time_units'] = time_units
             if 'EPSG' in fid.attrs:
                 attrs['EPSG'] = int(fid.attrs['EPSG'])
 
@@ -346,19 +463,15 @@ class Stack:
     def _read_legacy_time(self, fid, time_key):
         for key in (time_key, 'time', 'tdec', 't'):
             if key in fid:
-                units = fid[key].attrs.get('units')
-                if isinstance(units, bytes):
-                    units = units.decode('utf-8')
-                if key == 'time':
-                    return _time_values_to_datetime64(fid[key][()], units=units)
-                if units is not None and units.startswith('seconds since 1970-01-01'):
-                    return _time_values_to_datetime64(fid[key][()], units=units)
-                return _tdec_to_datetime64(fid[key][()])
+                units = self._time_units_override
+                if units is None:
+                    units = _normalize_time_units(fid[key].attrs.get('units'))
+                return _time_values_to_coordinate(fid[key][()], units=units)
 
         data_key = self._ds_hdr or Stack._guess_legacy_data_key(fid)
         nt = fid[data_key].shape[0] if self.original_fmt != 'HWN' else fid[data_key].shape[-1]
         warnings.warn('No time vector found. Using Unix epoch seconds.', category=UserWarning)
-        return EPOCH + np.arange(nt).astype('timedelta64[s]')
+        return EPOCH + np.arange(nt).astype('timedelta64[s]'), TIME_UNITS
 
     @staticmethod
     def _rasterinfo_from_dataset(ds):
@@ -379,7 +492,11 @@ class Stack:
             self._load_legacy_hdf5(ds_hdr=self._ds_hdr, time_key=self._time_key)
         else:
             self.ds.close()
-            self.ds = xr.open_dataset(self.filename, engine='h5netcdf', decode_times=True)
+            decode_times = self._time_units_override is None
+            self.ds = xr.open_dataset(
+                self.filename, engine='h5netcdf', decode_times=decode_times
+            )
+            self.ds = self._normalize_dataset_time(self.ds)
             self._update_dataset_cache()
         self._dirty = False
 
@@ -431,6 +548,7 @@ class Stack:
 
         self.fid = h5netcdf.File(self.filename, 'a')
         self.ds = xr.open_dataset(self.filename, engine='h5netcdf', decode_times=True)
+        self.ds = self._normalize_dataset_time(self.ds)
         self.hdr = hdr
         self.original_fmt = fmt
         self.fmt = 'NHW'
@@ -512,6 +630,13 @@ class Stack:
         if indexers is None:
             return {}
         return {str(key): int(value) for key, value in dict(indexers).items()}
+
+    @staticmethod
+    def _time_units_from_dataarray(data):
+        units = data.attrs.get('units')
+        if units is None:
+            units = data.encoding.get('units')
+        return _normalize_time_units(units)
 
     def __getitem__(self, name):
         """
@@ -686,6 +811,8 @@ class Stack:
             raise ValueError('Must provide t or date.')
         value = date if date is not None else t
         if _is_datetime_like(value):
+            if not self.time_is_calendar:
+                raise ValueError('Datetime selection requires calendar time coordinates.')
             target = _as_datetime64_scalar(value)
             times = np.asarray(self.ds['time'].values).astype('datetime64[ns]')
             delta = np.abs((times - target) / np.timedelta64(1, 'ns'))
@@ -712,18 +839,43 @@ class Stack:
     @property
     def tdec(self):
         """
-        Decimal years computed from the xarray time coordinate.
+        Decimal years for calendar time, or native numeric time values.
         """
         if 'time' not in self.ds.coords:
             return None
-        return _datetime64_to_tdec(self.ds['time'].values)
+        values = self.ds['time'].values
+        if np.issubdtype(np.asarray(values).dtype, np.datetime64):
+            return _datetime64_to_tdec(values)
+        return np.asarray(values, dtype=float)
 
     @property
     def dt(self):
         """
-        Return mean sampling interval in decimal years.
+        Return mean sampling interval in the units represented by tdec.
         """
         return np.mean(np.diff(self.tdec))
+
+    @property
+    def time_units(self):
+        """
+        Return the active time coordinate units.
+        """
+        if 'time' not in self.ds.coords:
+            return None
+        units = self._time_units_from_dataarray(self.ds['time'])
+        units = units or _normalize_time_units(self.ds.attrs.get('time_units'))
+        if units is not None:
+            return units
+        return TIME_UNITS if self.time_is_calendar else None
+
+    @property
+    def time_is_calendar(self):
+        """
+        True when the time coordinate represents calendar datetimes.
+        """
+        if 'time' not in self.ds.coords:
+            return False
+        return np.issubdtype(np.asarray(self.ds['time'].values).dtype, np.datetime64)
 
     @property
     def Nt(self):

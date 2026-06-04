@@ -26,10 +26,12 @@ def main(args):
         stack = ice.Stack(args.rasterfile)
         hdr = stack.hdr
         tdec = stack.tdec
+        time_units = 'decimal years' if stack.time_is_calendar else stack.time_units
         
     else:
         hdr = ice.RasterInfo(args.rasterfile, match=args.match)
         tdec = None
+        time_units = None
 
     print('Image shape: (%d, %d)' % (hdr.ny, hdr.nx))
 
@@ -41,8 +43,9 @@ def main(args):
     print('Geographic spacing: (dy = %f, dx = %f)' % (hdr.dy, hdr.dx))
 
     if tdec is not None:
-        print('Time span: %f -> %f' % (tdec[0], tdec[-1]))
-        print('Median time spacing: %f' % np.median(np.diff(tdec)))
+        label = time_units or 'time units'
+        print('Time span (%s): %f -> %f' % (label, tdec[0], tdec[-1]))
+        print('Median time spacing (%s): %f' % (label, np.median(np.diff(tdec))))
 
     print('EPSG:', hdr.epsg)
 

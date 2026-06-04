@@ -235,6 +235,16 @@ raster_array = stack['data'].sel(time='2014-06-01', method='nearest').values
 ```
 In the above example, we access stack variables through xarray `DataArray` objects. This exposes named-axis indexing, reductions, coordinate-aware selection, and methods such as `differentiate`.
 
+Legacy simulation stacks can also use plain numeric time. If a legacy `tdec` or
+`time` dataset has `units="days"`, `Stack` keeps those values as numeric days.
+For files without unit metadata, pass an override when opening:
+
+```python
+stack = ice.Stack("simulation_stack.h5", time_units="days")
+print(stack.tdec)       # raw simulation days
+print(stack.time_units) # "days"
+```
+
 ### Loading NetCDF stacks
 
 The current `Stack` strategy is to keep stack files roughly NetCDF-compliant and to use `xarray` as the backbone for labeled dimensions, coordinates, and array operations. This keeps the `Stack` wrapper small while making common time-series operations available through the broader xarray ecosystem.

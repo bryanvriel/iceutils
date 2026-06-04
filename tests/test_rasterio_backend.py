@@ -424,6 +424,90 @@ def test_stack_reads_legacy_nanosecond_time_values_with_second_units(tmp_path):
         assert np.ptp(stack.tdec) > 0.0
 
 
+def test_stack_reads_legacy_tdec_with_plain_day_units_as_numeric_time(tmp_path):
+    path = tmp_path / "legacy_days.h5"
+    days = np.array([0.0, 5.0, 12.5])
+    data = np.arange(18, dtype=np.float32).reshape(3, 2, 3)
+    with h5py.File(path, "w") as fid:
+        fid.attrs["format"] = "NHW"
+        fid.attrs["EPSG"] = 3413
+        fid["x"] = np.array([10.0, 12.0, 14.0])
+        fid["y"] = np.array([20.0, 17.0])
+        tdec = fid.create_dataset("tdec", data=days)
+        tdec.attrs["units"] = "days"
+        fid["data"] = data
+
+    with Stack(str(path)) as stack:
+        assert not stack.time_is_calendar
+        assert stack.time_units == "days"
+        assert stack.ds["time"].dtype.kind in ("f", "i", "u")
+        assert np.allclose(stack.tdec, days)
+        assert stack.time_to_index(t=6.0) == 1
+        with pytest.raises(ValueError):
+            stack.time_to_index(date="2020-01-01")
+        assert np.array_equal(stack.slice(1), data[1])
+        assert np.array_equal(stack.get_chunk(slice(0, 2), slice(1, 3)), data[:, :, 1:3])
+        assert np.array_equal(stack.timeseries(coord=(1, 2)), data[:, 1, 2])
+        assert np.array_equal(stack.mean(), data.mean(axis=0))
+
+
+def test_stack_reads_unannotated_legacy_tdec_as_decimal_years(tmp_path):
+    path = tmp_path / "legacy_decimal_years.h5"
+    tdec = np.array([2020.0, 2020.5, 2021.0])
+    with h5py.File(path, "w") as fid:
+        fid.attrs["format"] = "NHW"
+        fid["x"] = np.array([10.0, 12.0, 14.0])
+        fid["y"] = np.array([20.0, 17.0])
+        fid["tdec"] = tdec
+        fid["data"] = np.zeros((3, 2, 3), dtype=np.float32)
+
+    with Stack(str(path)) as stack:
+        assert stack.time_is_calendar
+        assert stack.time_units == "decimal_year"
+        assert np.allclose(stack.tdec, tdec)
+        assert stack.time_to_index(date="2020-07-01") == 1
+
+
+def test_stack_time_units_override_reads_legacy_tdec_as_numeric_time(tmp_path):
+    path = tmp_path / "legacy_days_without_units.h5"
+    days = np.array([0.0, 10.0, 20.0])
+    with h5py.File(path, "w") as fid:
+        fid.attrs["format"] = "NHW"
+        fid["x"] = np.array([10.0, 12.0, 14.0])
+        fid["y"] = np.array([20.0, 17.0])
+        fid["tdec"] = days
+        fid["data"] = np.zeros((3, 2, 3), dtype=np.float32)
+
+    with Stack(str(path), time_units="days") as stack:
+        assert not stack.time_is_calendar
+        assert stack.time_units == "days"
+        assert np.allclose(stack.tdec, days)
+        assert stack.time_to_index(t=12.0) == 1
+
+
+def test_stack_reads_netcdf_plain_day_time_as_numeric_time(tmp_path):
+    path = tmp_path / "numeric_day_stack.nc"
+    days = np.array([0.0, 2.0, 4.0])
+    data = np.arange(18, dtype=np.float32).reshape(3, 2, 3)
+    ds = xr.Dataset(
+        data_vars={"data": (("time", "y", "x"), data)},
+        coords={
+            "time": ("time", days, {"units": "days"}),
+            "y": ("y", np.array([20.0, 17.0])),
+            "x": ("x", np.array([10.0, 12.0, 14.0])),
+        },
+        attrs={"EPSG": 3413},
+    )
+    ds.to_netcdf(path, engine="h5netcdf")
+    ds.close()
+
+    with Stack(str(path)) as stack:
+        assert not stack.time_is_calendar
+        assert stack.time_units == "days"
+        assert np.allclose(stack.tdec, days)
+        assert np.array_equal(stack.timeseries(coord=(1, 2)), data[:, 1, 2])
+
+
 def test_stack_indexers_select_extra_netcdf_dimensions(tmp_path):
     path = tmp_path / "multiband_stack.nc"
     data = np.arange(2 * 3 * 4 * 5, dtype=np.float32).reshape(2, 3, 4, 5)
