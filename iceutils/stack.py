@@ -345,8 +345,9 @@ class Stack:
                     continue
 
                 arr = value[()]
-                if arr.ndim == 3:
-                    if self.original_fmt == 'HWN' or arr.shape == (y.size, x.size, time.size):
+                stack_dims = self._legacy_stack_dims(arr.shape, x, y, time)
+                if stack_dims is not None:
+                    if stack_dims == ('y', 'x', 'time'):
                         arr = np.moveaxis(arr, -1, 0)
                     data_vars[key] = (('time', 'y', 'x'), arr)
                 elif arr.ndim == 2 and arr.shape == (y.size, x.size):
@@ -384,14 +385,23 @@ class Stack:
 
         data = raw_ds[key]
         shape = value.shape
-        if value.ndim == 3:
-            if self.original_fmt == 'HWN' or shape == (y.size, x.size, time.size):
-                data = data.rename(dict(zip(data.dims, ('y', 'x', 'time'))))
-                return data.transpose('time', 'y', 'x')
-            data = data.rename(dict(zip(data.dims, ('time', 'y', 'x'))))
+        stack_dims = self._legacy_stack_dims(shape, x, y, time)
+        if stack_dims is not None:
+            data = data.rename(dict(zip(data.dims, stack_dims)))
             return data.transpose('time', 'y', 'x')
         if value.ndim == 2 and shape == (y.size, x.size):
             return data.rename(dict(zip(data.dims, ('y', 'x'))))
+        return None
+
+    def _legacy_stack_dims(self, shape, x, y, time):
+        if len(shape) != 3:
+            return None
+        nhw_shape = (time.size, y.size, x.size)
+        hwn_shape = (y.size, x.size, time.size)
+        if shape == hwn_shape and (self.original_fmt == 'HWN' or shape != nhw_shape):
+            return ('y', 'x', 'time')
+        if shape == nhw_shape:
+            return ('time', 'y', 'x')
         return None
 
     def _close_legacy_source(self):

@@ -573,6 +573,30 @@ def test_stack_reads_legacy_nhw_hdf5_as_canonical_xarray(tmp_path):
         assert np.array_equal(stack.timeseries(coord=(1, 2)), data[:, 1, 2])
 
 
+def test_stack_reads_irregular_legacy_3d_metadata_with_private_dims(tmp_path):
+    path = tmp_path / "legacy_irregular_3d.h5"
+    data = np.arange(12, dtype=np.float32).reshape(2, 2, 3)
+    transect_coordinates = np.arange(12, dtype=np.float64).reshape(3, 2, 2)
+    with h5py.File(path, "w") as fid:
+        fid["x"] = np.array([10.0, 12.0, 14.0])
+        fid["y"] = np.array([20.0, 17.0])
+        fid["tdec"] = np.array([2020.0, 2021.0])
+        fid["data"] = data
+        fid["transect_coordinates"] = transect_coordinates
+        fid.attrs["format"] = "NHW"
+
+    with Stack(str(path)) as stack:
+        assert stack["data"].dims == ("time", "y", "x")
+        assert stack["transect_coordinates"].dims == (
+            "transect_coordinates_dim_0",
+            "transect_coordinates_dim_1",
+            "transect_coordinates_dim_2",
+        )
+        assert np.array_equal(
+            stack["transect_coordinates"].values, transect_coordinates
+        )
+
+
 def test_stack_reads_legacy_hwn_hdf5_as_canonical_xarray(tmp_path):
     path = tmp_path / "legacy_hwn.h5"
     canonical = np.arange(12, dtype=np.float32).reshape(2, 2, 3)
