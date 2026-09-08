@@ -8,28 +8,7 @@ import numpy as np
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 import iceutils as ice
-
-def parse_indexer(value):
-    try:
-        dim, index = value.split('=', 1)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(
-            'Indexers must be provided as DIM=INDEX'
-        ) from exc
-    if not dim:
-        raise argparse.ArgumentTypeError(
-            'Indexer dimension cannot be empty'
-        )
-    try:
-        index = int(index)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(
-            'Indexer index must be an integer'
-        ) from exc
-    return dim, index
-
-def indexer_dict(values):
-    return dict(values or [])
+from iceutils._cli import parse_indexer
 
 def time_label(stack, index):
     value = stack.tdec[index]
@@ -86,7 +65,7 @@ def parse():
 
 def main(args):
     # Load Stack
-    stack = ice.Stack(args.stackfile, indexers=indexer_dict(args.isel))
+    stack = ice.Stack(args.stackfile, indexers=dict(args.isel))
     
     # Load reference SAR image
     if args.ref is not None:

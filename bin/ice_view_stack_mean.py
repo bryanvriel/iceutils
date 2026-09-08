@@ -6,29 +6,9 @@ import iceutils as ice
 import argparse
 import sys
 
+from iceutils._cli import parse_indexer
+
 line = None
-
-def parse_indexer(value):
-    try:
-        dim, index = value.split('=', 1)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(
-            'Indexers must be provided as DIM=INDEX'
-        ) from exc
-    if not dim:
-        raise argparse.ArgumentTypeError(
-            'Indexer dimension cannot be empty'
-        )
-    try:
-        index = int(index)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(
-            'Indexer index must be an integer'
-        ) from exc
-    return dim, index
-
-def indexer_dict(values):
-    return dict(values or [])
 
 def parse():
     parser = argparse.ArgumentParser(description="""
@@ -60,7 +40,7 @@ def main(args):
 
     # Load the stack
     stack = ice.Stack(
-        args.stackfile, ds_hdr=args.key, indexers=indexer_dict(args.isel)
+        args.stackfile, ds_hdr=args.key, indexers=dict(args.isel)
     )
 
     # Check if requested dataset is 2D. If so, view it directly

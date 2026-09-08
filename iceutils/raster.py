@@ -105,6 +105,7 @@ def _window_from_inputs(transform, height, width, projWin=None, islice=None, jsl
     if projWin is None and islice is None and jslice is None:
         return None
 
+    # Convert geographic bounds to a cropped rasterio window.
     if projWin is not None and islice is None and jslice is None:
         try:
             window = window_from_bounds(
@@ -122,6 +123,7 @@ def _window_from_inputs(transform, height, width, projWin=None, islice=None, jsl
             return Window(0, 0, width, height)
         return window
 
+    # Convert image slices to a row/column window.
     row_start, row_stop = _normalize_slice(islice, height)
     col_start, col_stop = _normalize_slice(jslice, width)
     return Window(col_start, row_start, col_stop - col_start, row_stop - row_start)
@@ -182,12 +184,12 @@ class Raster(numpy.lib.mixins.NDArrayOperatorsMixin):
                  islice=None, jslice=None,
                  projWin=None, gdalOpts=None, gdalMatch=True):
 
-        # Default no data value
+        # Initialize optional raster metadata and compatibility options.
         self.nodataval = None
         if gdalOpts is None:
             gdalOpts = {}
 
-        # If data and header are provided, save them and return
+        # Retain supplied data and geometry without performing file I/O.
         if data is not None and hdr is not None:
             self.data = data
             self.hdr = hdr
@@ -197,7 +199,7 @@ class Raster(numpy.lib.mixins.NDArrayOperatorsMixin):
             self.rasterfile = None
             return
 
-        # Attempt to guess format of generic filename if provided
+        # Resolve a positional filename to a raster or stack source.
         if len(args) > 0:
             filename = args[0]
             if filename.endswith('.h5') or filename.endswith('.nc'):
@@ -205,7 +207,7 @@ class Raster(numpy.lib.mixins.NDArrayOperatorsMixin):
             else:
                 rasterfile = filename
 
-        # Load raster data and do any subsetting using rasterio directly
+        # Load the selected raster or stack region.
         if rasterfile is not None:
             self.data, self.hdr, self.nodataval = self.load_rasterio(
                 rasterfile, band=band, projWin=projWin,
@@ -214,20 +216,19 @@ class Raster(numpy.lib.mixins.NDArrayOperatorsMixin):
             )
         elif stackfile is not None:
             assert h5path is not None
-            # Load the header info manually
+
+            # Build stack geometry, select the requested region, and read values.
             self.hdr = RasterInfo(stackfile=stackfile)
-            # Load subset/slicing information
-            islice, jslice = self.hdr.subset_region(projWin=projWin, islice=islice, jslice=jslice)
-            # Read data
+            islice, jslice = self.hdr.subset_region(
+                projWin=projWin, islice=islice, jslice=jslice
+            )
             self.data = self.load_hdf5(stackfile, h5path, islice=islice, jslice=jslice)
         else:
             raise ValueError('Must provide rasterio-compatible raster or HDF5 stack.')
 
-        # Cache the slices for provenance
+        # Preserve source information and subsetting for later operations.
         self.islice = islice
         self.jslice = jslice
-
-        # Cache raster filename
         self.rasterfile = rasterfile
 
         return
@@ -259,16 +260,27 @@ class Raster(numpy.lib.mixins.NDArrayOperatorsMixin):
         -------
         d: ndarray
             Array for raster data.
+        hdr: RasterInfo
+            Header describing the selected raster region.
+        nodataval: scalar or None
+            No-data value recorded for the selected band.
         """
+        # Validate rasterio options before opening the file.
         read_opts = _validate_read_options(gdalOpts)
+
         with rasterio.open(filename) as src:
+            # Read the requested image window.
             window = _window_from_inputs(src.transform, src.height, src.width,
                                          projWin=projWin, islice=islice, jslice=jslice)
             d = src.read(band, window=window, **read_opts)
+
+            # Construct a header for the selected raster region.
             transform = src.window_transform(window) if window is not None else src.transform
             height, width = d.shape[-2:]
             hdr = RasterInfo(transform=transform, crs=src.crs, shape=(height, width),
                              dtype=np.dtype(src.dtypes[band - 1]), nbands=src.count)
+
+            # Preserve the no-data value for the requested band.
             nodataval = src.nodatavals[band - 1]
 
         return d, hdr, nodataval
@@ -337,11 +349,13 @@ class Raster(numpy.lib.mixins.NDArrayOperatorsMixin):
         -------
         None
         """
+        # Resolve output dtype and coordinate reference system.
         dtype = _as_dtype(dtype, data=self.data)
         crs = _as_crs(epsg=epsg, projstr=projstr, crs=None)
         if crs is None:
             crs = self.hdr.crs
 
+        # Build a rasterio profile from the current header.
         profile = {
             'driver': driver,
             'height': int(self.hdr.ny),
@@ -355,6 +369,7 @@ class Raster(numpy.lib.mixins.NDArrayOperatorsMixin):
         if nodataval is not None:
             profile['nodata'] = nodataval
 
+        # Write the raster data to the requested format.
         with rasterio.open(filename, 'w', **profile) as dst:
             dst.write(self.data.astype(dtype, copy=False), 1)
         return
@@ -394,7 +409,7 @@ class Raster(numpy.lib.mixins.NDArrayOperatorsMixin):
         if data is None:
             data = interpolate_raster(self, None, None, ref_hdr=hdr, time_index=None, **kwargs)
 
-        # Update members
+        # Store the resampled data and geometry.
         self.data = data
         self.hdr = hdr
 
@@ -743,8 +758,10 @@ class RasterInfo:
         """
         Initialize attributes.
         """
+        # Initialize attributes shared by every geometry construction path.
         self.nbands = int(nbands) if nbands is not None else None
 
+        # Load metadata from a file or construct it from supplied geometry.
         if rasterfile is not None:
             self.load_rasterio_info(rasterfile, islice=islice, jslice=jslice,
                                     band=band, match=match)
@@ -804,8 +821,11 @@ class RasterInfo:
         None
         """
         with rasterio.open(rasterfile) as src:
+            # Select the requested raster region.
             window = _window_from_inputs(src.transform, src.height, src.width,
                                          projWin=projWin, islice=islice, jslice=jslice)
+
+            # Store geometry and source metadata for the selected region.
             self.ny = int(window.height) if window is not None else src.height
             self.nx = int(window.width) if window is not None else src.width
             self.transform = src.window_transform(window) if window is not None else src.transform
@@ -911,9 +931,11 @@ class RasterInfo:
         jslice: slice
             Slice object specifying image columns to subset.
         """
+        # Convert the requested region to a rasterio window.
         window = _window_from_inputs(self.transform, self.ny, self.nx,
                                      projWin=projWin, islice=islice, jslice=jslice)
         if window is not None:
+            # Update the affine transform and dimensions to the selected region.
             islice, jslice = _slices_from_window(window)
             self.transform = window_transform(window, self.transform)
             self.ny, self.nx = int(window.height), int(window.width)
@@ -936,6 +958,7 @@ class RasterInfo:
         units: str, optional
             Units of coordinates.
         """
+        # Derive the full affine transform from the coordinate meshgrid.
         X = np.asarray(X)
         Y = np.asarray(Y)
         self.ny, self.nx = X.shape
@@ -944,6 +967,8 @@ class RasterInfo:
         b = X[1,0] - X[0,0] if self.ny > 1 else 0.0
         e = Y[1,0] - Y[0,0] if self.ny > 1 else 1.0
         self.transform = Affine(a, b, X[0,0], d, e, Y[0,0])
+
+        # Record the coordinate reference system and legacy scalar attributes.
         self.crs = _as_crs(epsg=epsg)
         self._epsg = self.crs.to_epsg() if self.crs is not None else None
         self.units = units
@@ -1055,7 +1080,8 @@ class RasterInfo:
         """
         Check for equivalence in headers.
         """
-        if self.shape != other.shape: return False
+        if self.shape != other.shape:
+            return False
         if not np.allclose(tuple(self.transform), tuple(other.transform), atol=1.0e-8):
             return False
         if self.units != other.units:
@@ -1390,11 +1416,13 @@ def _reproject_array(array, src_hdr, dst_hdr, nodataval=None, order=3, **kwargs)
     """
     Reproject or resample an array with rasterio when complete spatial metadata exists.
     """
+    # Fall back to interpolation when either header lacks a complete georeference.
     if src_hdr.transform is None or dst_hdr.transform is None:
         return None
     if src_hdr.crs is None or dst_hdr.crs is None:
         return None
 
+    # Allocate the output grid and resolve source and destination no-data values.
     dst_nodata = kwargs.get('dst_nodata', kwargs.get('cval', None))
     src_nodata = kwargs.get('src_nodata', nodataval)
     fill_value = 0 if dst_nodata is None else dst_nodata
@@ -1403,6 +1431,7 @@ def _reproject_array(array, src_hdr, dst_hdr, nodataval=None, order=3, **kwargs)
     except ValueError:
         destination = np.zeros(dst_hdr.shape, dtype=array.dtype)
 
+    # Reproject into the destination raster geometry.
     reproject(
         source=array,
         destination=destination,
@@ -1450,12 +1479,14 @@ def warp(raster, target_epsg=None, target_srs=None, source_srs=None,
     warped_raster: Raster
         Output warped Raster object.
     """
+    # Resolve the source coordinate reference system.
     src_crs = raster.hdr.crs
     if src_crs is None and source_srs is not None:
         src_crs = CRS.from_user_input(source_srs)
     if src_crs is None:
         raise AssertionError('Must provide source_srs since no CRS found for input.')
 
+    # Resolve the requested output coordinate reference system.
     if target_epsg is not None:
         dst_crs = CRS.from_epsg(target_epsg)
     elif target_srs is not None:
@@ -1465,6 +1496,7 @@ def warp(raster, target_epsg=None, target_srs=None, source_srs=None,
     else:
         raise ValueError('Must provide RasterInfo, target_epsg, or target_srs.')
 
+    # Construct a target grid or update the supplied grid's CRS.
     if target_hdr is None:
         kwargs_transform = {}
         if target_dims is not None:
@@ -1483,13 +1515,14 @@ def warp(raster, target_epsg=None, target_srs=None, source_srs=None,
             target_hdr = RasterInfo(transform=target_hdr.transform, crs=dst_crs,
                                     shape=target_hdr.shape, dtype=raster.data.dtype)
 
+    # Reproject the raster data to the target grid.
     data_warped = _reproject_array(
         raster.data, RasterInfo(transform=raster.hdr.transform, crs=src_crs,
                                 shape=raster.hdr.shape, dtype=raster.data.dtype),
         target_hdr, nodataval=raster.nodataval, num_threads=n_proc, **kwargs
     )
 
-    # Return new raster
+    # Return the warped data with its target geometry.
     return Raster(data=data_warped, hdr=target_hdr)
 
 def warp_with_gcp_splines(raster, gcp_hdr, x=None, y=None, out_hdr=None, order=3):
@@ -1553,6 +1586,7 @@ def write_raster(arrays, filename, geotransform=None, epsg=None,
     n_bands = len(arrays)
     Ny, Nx = arrays[0].shape
 
+    # Resolve output raster metadata from the supplied arrays and geometry.
     dtype = _as_dtype(dtype, data=arrays[0])
     transform = Affine.identity()
     if geotransform is not None:
@@ -1572,6 +1606,7 @@ def write_raster(arrays, filename, geotransform=None, epsg=None,
     if nodataval is not None:
         profile['nodata'] = nodataval
 
+    # Write each input array as one raster band.
     with rasterio.open(filename, 'w', **profile) as dst:
         for bcnt, array in enumerate(arrays):
             dst.write(array.astype(dtype, copy=False), bcnt + 1)

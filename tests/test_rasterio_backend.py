@@ -20,7 +20,9 @@ from rasterio.warp import calculate_default_transform, reproject
 os.environ.setdefault("MPLCONFIGDIR", os.path.join(tempfile.gettempdir(), "iceutils-mpl"))
 
 from iceutils.raster import Raster, RasterInfo, warp, write_gdal
+from iceutils._cli import parse_indexer
 from iceutils.stack import Stack, TIME_UNITS
+import iceutils.stack as stack_module
 
 
 def _write_geotiff(path, data, transform=None, crs="EPSG:3413", nodata=None):
@@ -394,6 +396,140 @@ def test_stack_writes_fractional_second_times_as_float_seconds(tmp_path):
 
     with Stack(str(path)) as stack:
         assert np.allclose(stack.tdec, tdec)
+
+
+def test_stack_writes_are_visible_through_xarray_access(tmp_path):
+    path = tmp_path / "stack_write_visibility.h5"
+    data = np.arange(12, dtype=np.float32).reshape(2, 2, 3)
+
+    with Stack(str(path), mode="w") as stack:
+        stack.initialize(np.array([2020.0, 2021.0]), _stack_hdr((2, 3)))
+        stack.create_dataset("data", data.shape, dtype=data.dtype)
+        stack.set_slice(0, data[0])
+        stack.set_slice(1, data[1])
+
+        assert np.array_equal(stack["data"].values, data)
+
+        stack.create_dataset("chunk_data", data.shape, dtype=data.dtype)
+        stack.set_chunk(slice(None), slice(None), data, key="chunk_data")
+        assert np.array_equal(stack["chunk_data"].values, data)
+
+
+def test_stack_preserves_non_epoch_calendar_time_units(tmp_path):
+    path = tmp_path / "legacy_calendar_days.h5"
+    days = np.array([0.0, 2.5, 10.0])
+    expected = np.array(
+        ["2001-03-01", "2001-03-03T12:00:00", "2001-03-11"],
+        dtype="datetime64[ns]",
+    )
+
+    with h5py.File(path, "w") as fid:
+        fid.attrs["format"] = "NHW"
+        fid["x"] = np.array([10.0, 12.0, 14.0])
+        fid["y"] = np.array([20.0, 17.0])
+        time = fid.create_dataset("tdec", data=days)
+        time.attrs["units"] = "days since 2001-03-01 00:00:00"
+        fid["data"] = np.zeros((days.size, 2, 3), dtype=np.float32)
+
+    with Stack(str(path)) as stack:
+        assert stack.time_is_calendar
+        assert stack.time_units == "days since 2001-03-01 00:00:00"
+        assert np.array_equal(stack.ds["time"].values, expected)
+
+
+def test_stack_recognizes_decimal_year_unit_alias(tmp_path):
+    path = tmp_path / "legacy_decimal_year_alias.h5"
+    tdec = np.array([2020.0, 2020.5, 2021.0])
+
+    with h5py.File(path, "w") as fid:
+        fid.attrs["format"] = "NHW"
+        fid["x"] = np.array([10.0, 12.0, 14.0])
+        fid["y"] = np.array([20.0, 17.0])
+        time = fid.create_dataset("tdec", data=tdec)
+        time.attrs["units"] = "decimal years"
+        fid["data"] = np.zeros((tdec.size, 2, 3), dtype=np.float32)
+
+    with Stack(str(path)) as stack:
+        assert stack.time_units == "decimal_year"
+        assert np.allclose(stack.tdec, tdec)
+
+
+def test_stack_canonical_metadata_error_does_not_fall_back_to_legacy(tmp_path, monkeypatch):
+    path = tmp_path / "canonical_bad_time_units.nc"
+    ds = xr.Dataset(
+        data_vars={"data": (("time", "y", "x"), np.zeros((2, 2, 3)))},
+        coords={
+            "time": ("time", np.array([0.0, 1.0])),
+            "y": ("y", np.array([20.0, 17.0])),
+            "x": ("x", np.array([10.0, 12.0, 14.0])),
+        },
+    )
+    ds.to_netcdf(path, engine="h5netcdf")
+    ds.close()
+
+    legacy_calls = []
+
+    def load_legacy(*args, **kwargs):
+        legacy_calls.append((args, kwargs))
+
+    monkeypatch.setattr(Stack, "_load_legacy_hdf5", load_legacy)
+
+    with pytest.raises(ValueError, match="Unsupported calendar time unit"):
+        Stack(str(path), time_units="fortnights since 2000-01-01")
+
+    assert not legacy_calls
+
+
+def test_stack_missing_file_propagates_io_error(tmp_path):
+    with pytest.raises(OSError):
+        Stack(str(tmp_path / "missing_stack.h5"))
+
+
+def test_stack_closes_canonical_dataset_when_initialization_fails(tmp_path, monkeypatch):
+    path = tmp_path / "canonical_close_failure.nc"
+    ds = xr.Dataset(
+        coords={
+            "time": ("time", np.array(["2020-01-01"], dtype="datetime64[ns]")),
+            "y": ("y", np.array([20.0, 17.0])),
+            "x": ("x", np.array([10.0, 12.0, 14.0])),
+        },
+    )
+    ds.to_netcdf(path, engine="h5netcdf")
+    ds.close()
+
+    opened = xr.open_dataset(path, engine="h5netcdf", decode_times=True)
+    closed = []
+
+    class TrackedDataset:
+        def __init__(self, dataset):
+            self.dataset = dataset
+
+        @property
+        def sizes(self):
+            return self.dataset.sizes
+
+        def __getitem__(self, key):
+            return self.dataset[key]
+
+        def __getattr__(self, name):
+            return getattr(self.dataset, name)
+
+        def close(self):
+            closed.append(True)
+            self.dataset.close()
+
+    def fail_header(ds):
+        raise RuntimeError("invalid canonical metadata")
+
+    monkeypatch.setattr(
+        stack_module.xr, "open_dataset", lambda *args, **kwargs: TrackedDataset(opened)
+    )
+    monkeypatch.setattr(Stack, "_rasterinfo_from_dataset", staticmethod(fail_header))
+
+    with pytest.raises(RuntimeError, match="invalid canonical metadata"):
+        Stack(str(path))
+
+    assert closed == [True]
 
 
 def test_stack_reads_legacy_nanosecond_time_values_with_second_units(tmp_path):
@@ -802,6 +938,60 @@ def test_solver_uses_model_regularization_indices_for_bsplines():
     assert np.array_equal(reg_indices, model.reg_indices)
 
 
+def test_iterate_lsqr_uses_public_model_prediction_for_outliers():
+    solver = _solver_module()
+    G = np.eye(3)
+
+    class DummySolver:
+        def invert(self, G, d, wgt):
+            return solver.SUCCESS, np.array([0.0, 0.0, 10.0]), np.eye(3)
+
+    class OffsetModel:
+        def predict(self, m):
+            return {"full": np.zeros(3)}
+
+    d = np.array([0.0, 0.0, 10.0])
+    w = np.ones(3)
+    status, m, Cm = solver.iterate_lsqr(
+        DummySolver(), OffsetModel(), G, d, w, n_iter=1, n_std=1.0
+    )
+
+    assert status == solver.SUCCESS
+    assert np.array_equal(m, np.array([0.0, 0.0, 10.0]))
+    assert np.array_equal(Cm, np.eye(3))
+    assert np.isnan(d[2])
+    assert np.isnan(w[2])
+
+
+def test_iterate_lsqr_array_path_preserves_failure_and_matrix_prediction():
+    solver = _solver_module()
+    G = np.eye(3)
+
+    class FailingSolver:
+        def invert(self, G, d, wgt):
+            return solver.FAIL, None, None
+
+    d = np.array([0.0, 0.0, 10.0])
+    w = np.ones(3)
+    status, m, Cm = solver._iterate_lsqr_arrays(FailingSolver(), G, d, w)
+    assert status == solver.FAIL
+    assert m is None
+    assert Cm is None
+    assert np.array_equal(d, np.array([0.0, 0.0, 10.0]))
+    assert np.array_equal(w, np.ones(3))
+
+    class MatrixSolver:
+        def invert(self, G, d, wgt):
+            return solver.SUCCESS, np.array([0.0, 0.0, 10.0]), np.eye(3)
+
+    status, m, Cm = solver._iterate_lsqr_arrays(MatrixSolver(), G, d, w, n_iter=1)
+    assert status == solver.SUCCESS
+    assert np.array_equal(m, np.array([0.0, 0.0, 10.0]))
+    assert np.array_equal(Cm, np.eye(3))
+    assert np.array_equal(d, np.array([0.0, 0.0, 10.0]))
+    assert np.array_equal(w, np.ones(3))
+
+
 def test_solver_inversion_points_joblib_matches_serial(tmp_path):
     solver = _solver_module()
     userfile = _write_linear_user_model(tmp_path / "linear_model.py")
@@ -917,55 +1107,52 @@ def test_ice_resample_detects_netcdf_stack_inputs():
     assert not module._is_stack_file("velocity_stack.tif")
 
 
-def test_ice_explore_stack_parses_extra_dimension_indexers():
-    module = _load_bin_script("ice_explore_stack.py")
+def test_parse_indexer_accepts_negative_indices_and_rejects_invalid_values():
+    assert parse_indexer("band=-1") == ("band", -1)
+    assert parse_indexer("component=12") == ("component", 12)
 
-    assert module.parse_indexer("band=0") == ("band", 0)
-    assert module.parse_indexer("component=12") == ("component", 12)
-    assert module.indexer_dict([("band", 1), ("component", 2)]) == {
-        "band": 1,
-        "component": 2,
-    }
-
-    with pytest.raises(argparse.ArgumentTypeError):
-        module.parse_indexer("band")
-    with pytest.raises(argparse.ArgumentTypeError):
-        module.parse_indexer("=0")
-    with pytest.raises(argparse.ArgumentTypeError):
-        module.parse_indexer("band=first")
+    for value in ("band", "=0", "band=first"):
+        with pytest.raises(argparse.ArgumentTypeError):
+            parse_indexer(value)
 
 
-def test_ice_view_stack_mean_parses_extra_dimension_indexers():
-    module = _load_bin_script("ice_view_stack_mean.py")
+@pytest.mark.parametrize(
+    "script, extra_args, expected_model_indexers",
+    [
+        ("ice_animate_stack.py", [], None),
+        ("ice_view_stack_mean.py", [], None),
+        ("ice_explore_stack.py", ["-misel", "model=-1"], [("model", -1)]),
+    ],
+)
+def test_viewer_scripts_parse_and_pass_shared_dimension_indexers(
+    monkeypatch, script, extra_args, expected_model_indexers
+):
+    module = _load_bin_script(script)
+    monkeypatch.setattr(sys, "argv", [script, "input.h5"])
+    defaults = module.parse()
+    assert defaults.isel == []
+    if expected_model_indexers is not None:
+        assert defaults.misel == []
 
-    assert module.parse_indexer("band=0") == ("band", 0)
-    assert module.parse_indexer("component=12") == ("component", 12)
-    assert module.indexer_dict([("band", 1), ("component", 2)]) == {
-        "band": 1,
-        "component": 2,
-    }
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [script, "input.h5", "-isel", "band=-1", "-isel", "band=2"] + extra_args,
+    )
+    args = module.parse()
 
-    with pytest.raises(argparse.ArgumentTypeError):
-        module.parse_indexer("band")
-    with pytest.raises(argparse.ArgumentTypeError):
-        module.parse_indexer("=0")
-    with pytest.raises(argparse.ArgumentTypeError):
-        module.parse_indexer("band=first")
+    assert args.isel == [("band", -1), ("band", 2)]
+    if expected_model_indexers is not None:
+        assert args.misel == expected_model_indexers
 
+    captured = {}
 
-def test_ice_animate_stack_parses_extra_dimension_indexers():
-    module = _load_bin_script("ice_animate_stack.py")
+    def stop_stack(*args, **kwargs):
+        captured["indexers"] = kwargs["indexers"]
+        raise RuntimeError("stop after stack setup")
 
-    assert module.parse_indexer("band=0") == ("band", 0)
-    assert module.parse_indexer("component=12") == ("component", 12)
-    assert module.indexer_dict([("band", 1), ("component", 2)]) == {
-        "band": 1,
-        "component": 2,
-    }
+    monkeypatch.setattr(module.ice, "Stack", stop_stack)
+    with pytest.raises(RuntimeError, match="stop after stack setup"):
+        module.main(args)
 
-    with pytest.raises(argparse.ArgumentTypeError):
-        module.parse_indexer("band")
-    with pytest.raises(argparse.ArgumentTypeError):
-        module.parse_indexer("=0")
-    with pytest.raises(argparse.ArgumentTypeError):
-        module.parse_indexer("band=first")
+    assert captured["indexers"] == {"band": 2}

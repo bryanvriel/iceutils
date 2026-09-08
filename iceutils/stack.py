@@ -42,12 +42,10 @@ def _normalize_time_units(units):
 
 
 def _is_calendar_units(units):
-    units = _normalize_time_units(units)
     return units is not None and ' since ' in units.lower()
 
 
 def _is_plain_numeric_units(units):
-    units = _normalize_time_units(units)
     return units is not None and units != DECIMAL_YEAR_UNITS and not _is_calendar_units(units)
 
 
@@ -89,8 +87,6 @@ def _datetime64_to_tdec(time):
     Convert datetime64 values to decimal years.
     """
     arr = np.asarray(time)
-    if not np.issubdtype(arr.dtype, np.datetime64):
-        arr = _seconds_since_epoch_to_datetime64(arr)
     arr = arr.astype('datetime64[ns]')
     year_coord = arr.astype('datetime64[Y]')
     years = year_coord.astype(int) + 1970
@@ -105,7 +101,6 @@ def _calendar_units_to_datetime64(values, units):
     """
     Convert simple CF-style numeric time values to datetime64.
     """
-    units = _normalize_time_units(units)
     if units is not None and units.startswith('seconds since 1970-01-01'):
         return _seconds_since_epoch_to_datetime64(values)
 
@@ -144,19 +139,6 @@ def _calendar_units_to_datetime64(values, units):
     return np.datetime64(origin, 'ns') + nanoseconds.astype('timedelta64[ns]')
 
 
-def _time_values_to_datetime64(values, units=None):
-    """
-    Normalize supported time encodings to datetime64.
-    """
-    arr = np.asarray(values)
-    units = _normalize_time_units(units)
-    if np.issubdtype(arr.dtype, np.datetime64):
-        return arr.astype('datetime64[ns]')
-    if _is_calendar_units(units):
-        return _calendar_units_to_datetime64(arr, units)
-    return _tdec_to_datetime64(arr)
-
-
 def _time_values_to_coordinate(values, units=None):
     """
     Normalize file time values to either datetime64 or native numeric values.
@@ -165,10 +147,10 @@ def _time_values_to_coordinate(values, units=None):
     arr = np.asarray(values)
     if np.issubdtype(arr.dtype, np.datetime64):
         return arr.astype('datetime64[ns]'), units or TIME_UNITS
+    if _is_calendar_units(units):
+        return _calendar_units_to_datetime64(arr, units), units
     if _is_plain_numeric_units(units):
         return arr, units
-    if _is_calendar_units(units):
-        return _time_values_to_datetime64(arr, units=units), units
     return _tdec_to_datetime64(arr), DECIMAL_YEAR_UNITS
 
 
@@ -222,6 +204,7 @@ class Stack:
         ``time``, ``y``, and ``x``. Legacy HDF5 stacks are normalized into the
         same xarray dimension order.
         """
+        # Store file access and format settings.
         assert mode in ('r', 'r+', 'w', 'a', 'x'), 'Unsupported HDF5 file open mode'
         self.filename = filename
         self.mode = mode
@@ -230,7 +213,6 @@ class Stack:
         self.hdr = None
         self.ds = xr.Dataset()
         self.fid = None
-        self._datasets = {}
         self._dirty = False
         self._legacy = False
         self._legacy_source_ds = None
@@ -239,12 +221,13 @@ class Stack:
         self._indexers = self._normalize_indexers(indexers)
         self._time_units_override = _normalize_time_units(time_units)
 
+        # Open an existing stack or initialize a new file.
         if mode in ('r', 'r+') or (mode == 'a' and os.path.exists(filename)):
             self._open_existing(ds_hdr=ds_hdr, time_key=time_key)
             if mode in ('r+', 'a') and not self._legacy:
                 self.fid = h5netcdf.File(filename, 'a')
         else:
-            self._create_empty_file(mode)
+            self.fid = h5netcdf.File(self.filename, mode)
             if isinstance(init_stack, Stack):
                 self.initialize(init_stack.tdec, init_stack.hdr, names=init_names,
                                 data=init_data, fmt=fmt)
@@ -256,19 +239,17 @@ class Stack:
             elif any(value is not None for value in (init_stack, init_tdec, init_rasterinfo)):
                 raise ValueError('Must supply init_stack or init_tdec+init_rasterinfo.')
 
+        # Cache the time-series shape used for out-of-bounds requests.
         if self.Nt is not None:
             self._nan_tseries = np.full((self.Nt,), np.nan, dtype='f')
         else:
             self._nan_tseries = None
 
-    def _create_empty_file(self, mode):
-        h5_mode = 'w' if mode == 'w' else mode
-        self.fid = h5netcdf.File(self.filename, h5_mode)
-
     def _normalize_dataset_time(self, ds):
         if 'time' not in ds.coords:
             return ds
 
+        # Resolve units with an explicit caller override taking precedence.
         units = self._time_units_override
         if units is None:
             units = self._time_units_from_dataarray(ds['time'])
@@ -276,10 +257,12 @@ class Stack:
         if units is None:
             units = TIME_UNITS if np.issubdtype(ds['time'].dtype, np.datetime64) else None
 
+        # Reinterpret the coordinate only when the caller supplied units.
         if self._time_units_override is not None:
             time, units = _time_values_to_coordinate(ds['time'].values, units=units)
             ds = ds.assign_coords(time=('time', time))
 
+        # Keep coordinate and dataset metadata in agreement.
         if units is not None:
             ds['time'].attrs['units'] = units
             ds.attrs['time_units'] = units
@@ -287,97 +270,142 @@ class Stack:
 
     def _open_existing(self, ds_hdr=None, time_key='tdec'):
         decode_times = self._time_units_override is None
+
+        # Open a dataset with xarray when it has a supported representation.
         try:
-            ds = xr.open_dataset(self.filename, engine='h5netcdf', decode_times=decode_times,
-                                 phony_dims='sort')
-            if {'time', 'y', 'x'}.issubset(ds.sizes):
-                self.ds = self._normalize_dataset_time(ds)
-                self.original_fmt = ds.attrs.get('original_format', ds.attrs.get('format', 'NHW'))
-                self.fmt = 'NHW'
-                self.hdr = self._rasterinfo_from_dataset(self.ds)
-                self._update_dataset_cache()
-                return
+            ds = xr.open_dataset(
+                self.filename, engine='h5netcdf', decode_times=decode_times,
+                phony_dims='sort'
+            )
+        except ValueError:
+            ds = None
+
+        # Initialize canonical datasets after opening succeeds.
+        if ds is not None and {'time', 'y', 'x'}.issubset(ds.sizes):
+            opened_ds = ds
+            try:
+                ds = self._normalize_dataset_time(ds)
+                original_fmt = ds.attrs.get('original_format', ds.attrs.get('format', 'NHW'))
+                hdr = self._rasterinfo_from_dataset(ds)
+            except Exception:
+                ds.close()
+                if ds is not opened_ds:
+                    opened_ds.close()
+                raise
+
+            self.ds = ds
+            self.original_fmt = original_fmt
+            self.fmt = 'NHW'
+            self.hdr = hdr
+            return
+
+        # Reconstruct datasets that lack canonical xarray dimensions.
+        if ds is not None:
             ds.close()
-        except Exception:
-            pass
 
         self._legacy = True
         self._load_legacy_hdf5(ds_hdr=ds_hdr, time_key=time_key)
 
     def _load_legacy_hdf5(self, ds_hdr=None, time_key='tdec'):
+        """
+        Read legacy HDF5 datasets into canonical xarray dimensions.
+        """
+        # Discard a prior lazy source before rebuilding legacy variables.
         self._close_legacy_source()
         data_vars = {}
         raw_ds = None
         raw_ds_used = False
+        ds = None
+
+        # Use xarray lazily where its representation matches legacy datasets.
         try:
-            raw_ds = xr.open_dataset(self.filename, engine='h5netcdf',
-                                     decode_times=False, phony_dims='sort')
-        except Exception:
+            raw_ds = xr.open_dataset(
+                self.filename, engine='h5netcdf', decode_times=False,
+                phony_dims='sort'
+            )
+        except ValueError:
             raw_ds = None
 
-        with h5py.File(self.filename, 'r') as fid:
-            self.original_fmt = fid.attrs.get('format', 'NHW')
-            if isinstance(self.original_fmt, bytes):
-                self.original_fmt = self.original_fmt.decode('utf-8')
+        # Read legacy coordinates, attributes, and data variables from HDF5.
+        try:
+            with h5py.File(self.filename, 'r') as fid:
+                self.original_fmt = fid.attrs.get('format', 'NHW')
+                if isinstance(self.original_fmt, bytes):
+                    self.original_fmt = self.original_fmt.decode('utf-8')
 
-            x, y = self._read_legacy_xy(fid, ds_hdr)
-            time, time_units = self._read_legacy_time(fid, time_key)
-            coords = {
-                'time': ('time', time, {'units': time_units}),
-                'y': ('y', y),
-                'x': ('x', x),
-            }
+                x, y = self._read_legacy_xy(fid, ds_hdr)
+                time, time_units = self._read_legacy_time(fid, time_key)
+                coords = {
+                    'time': ('time', time, {'units': time_units}),
+                    'y': ('y', y),
+                    'x': ('x', x),
+                }
 
-            for key, value in self._iter_hdf5_datasets(fid):
-                if key in ('x', 'X', 'y', 'Y', time_key, 'tdec', 't', 'time'):
-                    continue
-                if key == 'names':
-                    data_vars[key] = ('time', self._decode_names(value[()]))
-                    continue
-                if key == 'chunk_shape':
-                    data_vars[key] = ('chunk_dim', value[()])
-                    continue
+                # Convert recognized raster datasets to canonical time/y/x order.
+                for key, value in self._iter_hdf5_datasets(fid):
+                    if key in ('x', 'X', 'y', 'Y', time_key, 'tdec', 't', 'time'):
+                        continue
+                    if key == 'names':
+                        data_vars[key] = ('time', self._decode_names(value[()]))
+                        continue
+                    if key == 'chunk_shape':
+                        data_vars[key] = ('chunk_dim', value[()])
+                        continue
 
-                data_array = self._legacy_data_array(raw_ds, key, value, x, y, time)
-                if data_array is not None:
-                    data_vars[key] = data_array
-                    raw_ds_used = True
-                    continue
+                    data_array = self._legacy_data_array(
+                        raw_ds, key, value, x, y, time
+                    )
+                    if data_array is not None:
+                        data_vars[key] = data_array
+                        raw_ds_used = True
+                        continue
 
-                arr = value[()]
-                stack_dims = self._legacy_stack_dims(arr.shape, x, y, time)
-                if stack_dims is not None:
-                    if stack_dims == ('y', 'x', 'time'):
-                        arr = np.moveaxis(arr, -1, 0)
-                    data_vars[key] = (('time', 'y', 'x'), arr)
-                elif arr.ndim == 2 and arr.shape == (y.size, x.size):
-                    data_vars[key] = (('y', 'x'), arr)
-                elif arr.ndim == 1 and arr.shape[0] == time.size:
-                    data_vars[key] = ('time', arr)
-                elif arr.ndim == 1:
-                    dim = '%s_dim' % key.replace('/', '_')
-                    data_vars[key] = (dim, arr)
-                else:
-                    dims = tuple('%s_dim_%d' % (key.replace('/', '_'), i) for i in range(arr.ndim))
-                    data_vars[key] = (dims, arr)
+                    arr = value[()]
+                    stack_dims = self._legacy_stack_dims(arr.shape, x, y, time)
+                    if stack_dims is not None:
+                        if stack_dims == ('y', 'x', 'time'):
+                            arr = np.moveaxis(arr, -1, 0)
+                        data_vars[key] = (('time', 'y', 'x'), arr)
+                    elif arr.ndim == 2 and arr.shape == (y.size, x.size):
+                        data_vars[key] = (('y', 'x'), arr)
+                    elif arr.ndim == 1 and arr.shape[0] == time.size:
+                        data_vars[key] = ('time', arr)
+                    elif arr.ndim == 1:
+                        dim = '%s_dim' % key.replace('/', '_')
+                        data_vars[key] = (dim, arr)
+                    else:
+                        dims = tuple(
+                            '%s_dim_%d' % (key.replace('/', '_'), i)
+                            for i in range(arr.ndim)
+                        )
+                        data_vars[key] = (dims, arr)
 
-            attrs = dict(fid.attrs)
-            attrs['original_format'] = self.original_fmt
-            attrs['format'] = 'xarray'
-            attrs['time_units'] = time_units
-            if 'EPSG' in fid.attrs:
-                attrs['EPSG'] = int(fid.attrs['EPSG'])
+                attrs = dict(fid.attrs)
+                attrs['original_format'] = self.original_fmt
+                attrs['format'] = 'xarray'
+                attrs['time_units'] = time_units
+                if 'EPSG' in fid.attrs:
+                    attrs['EPSG'] = int(fid.attrs['EPSG'])
 
-        if raw_ds is not None:
-            if raw_ds_used:
-                self._legacy_source_ds = raw_ds
-            else:
+            # Construct canonical metadata once all source datasets are known.
+            ds = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
+            hdr = self._rasterinfo_from_dataset(ds)
+        except Exception:
+            if raw_ds is not None:
                 raw_ds.close()
+            if ds is not None:
+                ds.close()
+            raise
 
-        self.ds = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
-        self.hdr = self._rasterinfo_from_dataset(self.ds)
+        # Keep the lazy xarray source alive only when the new dataset uses it.
+        if raw_ds is not None and raw_ds_used:
+            self._legacy_source_ds = raw_ds
+        elif raw_ds is not None:
+            raw_ds.close()
+
+        self.ds = ds
+        self.hdr = hdr
         self.fmt = 'NHW'
-        self._update_dataset_cache()
 
     def _legacy_data_array(self, raw_ds, key, value, x, y, time):
         if raw_ds is None or '/' in key or key not in raw_ds:
@@ -433,6 +461,7 @@ class Stack:
 
     @staticmethod
     def _read_legacy_xy(fid, ds_hdr=None):
+        # Read explicit coordinate vectors from common legacy dataset names.
         try:
             x = fid['x'][()].squeeze()
             y = fid['y'][()].squeeze()
@@ -441,6 +470,7 @@ class Stack:
                 x = fid['X'][()]
                 y = fid['Y'][()]
             except KeyError:
+                # Infer pixel coordinates when the legacy file has none.
                 if ds_hdr is None:
                     ds_hdr = Stack._guess_legacy_data_key(fid)
                 shape = fid[ds_hdr].shape
@@ -454,6 +484,7 @@ class Stack:
                 x = np.arange(nx)
                 y = np.arange(ny)
 
+        # Reduce stored coordinate grids to their one-dimensional axes.
         if x.ndim == 2:
             x = x[0, :]
         if y.ndim == 2:
@@ -471,6 +502,7 @@ class Stack:
         raise ValueError('Could not infer raster dimensions from stack file.')
 
     def _read_legacy_time(self, fid, time_key):
+        # Read the first recognized time vector with its associated units.
         for key in (time_key, 'time', 'tdec', 't'):
             if key in fid:
                 units = self._time_units_override
@@ -478,6 +510,7 @@ class Stack:
                     units = _normalize_time_units(fid[key].attrs.get('units'))
                 return _time_values_to_coordinate(fid[key][()], units=units)
 
+        # Build a minimal epoch-based coordinate when legacy metadata is absent.
         data_key = self._ds_hdr or Stack._guess_legacy_data_key(fid)
         nt = fid[data_key].shape[0] if self.original_fmt != 'HWN' else fid[data_key].shape[-1]
         warnings.warn('No time vector found. Using Unix epoch seconds.', category=UserWarning)
@@ -485,29 +518,36 @@ class Stack:
 
     @staticmethod
     def _rasterinfo_from_dataset(ds):
+        # Construct raster coordinates from the canonical xarray axes.
         x = np.asarray(ds['x'].values)
         y = np.asarray(ds['y'].values)
         epsg = ds.attrs.get('EPSG')
         if epsg is not None:
             epsg = int(epsg)
-        return RasterInfo(X=np.meshgrid(x, y)[0], Y=np.meshgrid(x, y)[1], epsg=epsg)
-
-    def _update_dataset_cache(self):
-        self._datasets = {key: self.ds[key] for key in self.ds.variables}
+        X, Y = np.meshgrid(x, y)
+        return RasterInfo(X=X, Y=Y, epsg=epsg)
 
     def _refresh_dataset_if_dirty(self):
         if not self._dirty:
             return
+
+        # Rebuild legacy datasets or reopen a canonical file after direct writes.
         if self._legacy:
             self._load_legacy_hdf5(ds_hdr=self._ds_hdr, time_key=self._time_key)
         else:
             self.ds.close()
             decode_times = self._time_units_override is None
-            self.ds = xr.open_dataset(
+            ds = xr.open_dataset(
                 self.filename, engine='h5netcdf', decode_times=decode_times
             )
-            self.ds = self._normalize_dataset_time(self.ds)
-            self._update_dataset_cache()
+            try:
+                ds = self._normalize_dataset_time(ds)
+            except Exception:
+                ds.close()
+                raise
+            self.ds = ds
+
+        # Subsequent reads now see the latest on-disk variables and values.
         self._dirty = False
 
     def _require_initialized(self):
@@ -531,9 +571,11 @@ class Stack:
         """
         Initialize a new xarray/NetCDF-compatible stack file.
         """
+        # Release the empty writable file before creating NetCDF coordinates.
         if self.fid is not None:
             self.fid.close()
 
+        # Write canonical time and spatial coordinates with stack metadata.
         times = _tdec_to_datetime64(tdec)
         attrs = {'format': 'xarray', 'original_format': fmt, 'time_units': TIME_UNITS}
         if hdr.epsg is not None:
@@ -552,10 +594,13 @@ class Stack:
             encoding={'time': _time_encoding(times)},
         )
         ds.close()
+
+        # Preserve the time encoding expected by existing Stack files.
         with h5py.File(self.filename, 'r+') as fid:
             fid['time'].attrs['units'] = TIME_UNITS
             fid['time'].attrs['calendar'] = TIME_CALENDAR
 
+        # Reopen the file for direct writes and xarray-backed access.
         self.fid = h5netcdf.File(self.filename, 'a')
         self.ds = xr.open_dataset(self.filename, engine='h5netcdf', decode_times=True)
         self.ds = self._normalize_dataset_time(self.ds)
@@ -564,8 +609,8 @@ class Stack:
         self.fmt = 'NHW'
         self._legacy = False
         self._dirty = False
-        self._update_dataset_cache()
 
+        # Add optional metadata and default raster variables.
         if names is not None:
             self.names = names
         if data:
@@ -585,11 +630,13 @@ class Stack:
         """
         Create a NetCDF-compatible dataset.
         """
+        # Validate that a writable, initialized stack has a new variable name.
         self._require_initialized()
         self._require_writable()
         if name in self.ds.variables or name in self.fid.variables:
             raise ValueError('Dataset %s already exists' % name)
 
+        # Map the requested shape to canonical or private NetCDF dimensions.
         data = kwargs.pop('data', None)
         fillvalue = kwargs.pop('fillvalue', None)
         dims = self._dims_for_shape(shape, name)
@@ -599,10 +646,12 @@ class Stack:
             chunks=chunks, **kwargs
         )
 
+        # Record spatial chunking once for callers that use it for tiling.
         if chunks is not None and len(chunks) == 3 and 'chunk_shape' not in self.fid.variables:
             self._ensure_dimension('chunk_dim', 3)
             self.fid.create_variable('chunk_shape', ('chunk_dim',), dtype='i8', data=np.asarray(chunks))
 
+        # Flush and refresh xarray so the new variable is immediately visible.
         self.fid.flush()
         self._dirty = True
         self._refresh_dataset_if_dirty()
@@ -652,13 +701,18 @@ class Stack:
         """
         Return an xarray DataArray.
         """
+        # Reload variables created or written through the HDF5 handle.
         self._refresh_dataset_if_dirty()
         data = self.ds[name]
-        indexers = {
-            key: value for key, value in self._indexers.items()
-            if key in data.dims
-        }
-        return data.isel(**indexers) if indexers else data
+
+        # Apply configured indexers only to dimensions present in this variable.
+        indexers = {}
+        for key, value in self._indexers.items():
+            if key in data.dims:
+                indexers[key] = value
+        if indexers:
+            return data.isel(**indexers)
+        return data
 
     def __setitem__(self, name, value):
         """
@@ -681,11 +735,15 @@ class Stack:
         """
         Set the name of each Raster in a Stack for reference.
         """
+        # Validate names against the initialized time coordinate.
         self._require_writable()
         self._require_initialized()
+
         values = np.asarray(names, dtype=str)
         if values.size != self.Nt:
             raise ValueError('names must have one value per time step.')
+
+        # Replace the existing NetCDF string variable and mark it for refresh.
         if 'names' in self.fid.variables:
             del self.fid.variables['names']
         self.fid.create_variable('names', ('time',), dtype=str, data=values)
@@ -696,9 +754,12 @@ class Stack:
         """
         Extract Stack 2D slice at given time index.
         """
+        # Select the requested time plane when the variable has a time dimension.
         data = self[key]
         if 'time' in data.dims:
             data = data.isel(time=index)
+
+        # Return xarray data directly or materialize values for legacy callers.
         if as_xarray:
             return data
         values = np.asarray(data.values).squeeze()
@@ -720,6 +781,7 @@ class Stack:
         """
         Get a 3D chunk of data defined by 2D slice objects.
         """
+        # Build spatial indexers only for dimensions available in this variable.
         data = self[key]
         indexers = {}
         if 'y' in data.dims:
@@ -727,6 +789,8 @@ class Stack:
         if 'x' in data.dims:
             indexers['x'] = slice_x
         data = data.isel(**indexers) if indexers else data
+
+        # Return xarray data directly or materialize the selected chunk.
         if as_xarray:
             return data
         return np.asarray(data.values)
@@ -766,6 +830,7 @@ class Stack:
         """
         Extract time series at a coordinate, optionally averaging a spatial window.
         """
+        # Map geographic coordinates to a pixel or use the supplied pixel index.
         if xy is not None and coord is None:
             x, y = xy
             row, col = self.hdr.xy_to_imagecoord(x, y)
@@ -774,6 +839,7 @@ class Stack:
         else:
             raise ValueError('Must pass in geographic or image coordinate.')
 
+        # Return a NaN series for points outside the requested spatial window.
         half_win = win_size // 2
         if row >= (self.Ny - half_win) or row < half_win:
             warnings.warn('Requested point outside of stack bounds. Returning NaN.',
@@ -784,6 +850,7 @@ class Stack:
                           category=UserWarning)
             return self._nan_tseries.copy()
 
+        # Select one pixel or average the requested spatial window.
         if win_size > 1:
             data = self[key].isel(
                 y=slice(row - half_win, row + half_win + 1),
@@ -801,10 +868,12 @@ class Stack:
         from tqdm import tqdm
         from .raster import interpolate_array
 
+        # Confirm that the requested variable can be resampled.
         if key not in self.ds:
             print('Warning: dataset %s not in stack' % key)
             return
 
+        # Create output storage and interpolate every time slice.
         output.create_dataset(key, (self.Nt, ref_hdr.shape[0], ref_hdr.shape[1]),
                               dtype=dtype, chunks=chunks)
         for k in tqdm(range(self.Nt)):
@@ -817,25 +886,32 @@ class Stack:
         """
         Convert decimal year or datetime-like value to nearest time index.
         """
+        # Validate the requested coordinate and select the supplied value.
         if t is None and date is None:
             raise ValueError('Must provide t or date.')
         value = date if date is not None else t
         if _is_datetime_like(value):
+            # Compare calendar dates only against calendar-valued coordinates.
             if not self.time_is_calendar:
                 raise ValueError('Datetime selection requires calendar time coordinates.')
             target = _as_datetime64_scalar(value)
             times = np.asarray(self.ds['time'].values).astype('datetime64[ns]')
             delta = np.abs((times - target) / np.timedelta64(1, 'ns'))
             return int(np.argmin(delta))
+
+        # Compare numeric values in their native time coordinate units.
         return int(np.argmin(np.abs(self.tdec - value)))
 
     def close(self):
         """
         Close open file handles.
         """
+        # Release xarray datasets and their optional lazy legacy source.
         if self.ds is not None:
             self.ds.close()
         self._close_legacy_source()
+
+        # Close the writable HDF5 handle when this Stack owns one.
         if self.fid is not None:
             self.fid.close()
             self.fid = None

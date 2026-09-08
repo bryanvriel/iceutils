@@ -81,29 +81,12 @@ def _solver_config(solver_type, reg_indices=None, rw_iter=1, regMat=None,
     }
 
 
-def _is_temporal_model(obj):
-    """
-    Return True for iceutils temporal model instances.
-    """
-    return isinstance(obj, Model)
-
-
 def _model_at_tdec(model, tdec):
     """
     Re-evaluate a pre-built temporal model collection at new decimal years.
     """
     dates = tdec2datestr(tdec, returndate=True)
     return Model(dates, collection=model.collection)
-
-
-def _regularization_matrix_from_model_prior(model, prior_cov):
-    """
-    Resolve a regularization matrix for a pre-built model.
-    """
-    if isinstance(prior_cov, np.ndarray):
-        return np.linalg.inv(prior_cov)
-
-    return None
 
 
 def _regularization_indices(model):
@@ -123,7 +106,7 @@ def _resolve_temporal_models(model_or_userfile, stack_tdec, nt_out,
     """
     tfit = np.linspace(stack_tdec[0], stack_tdec[-1], nt_out)
 
-    if _is_temporal_model(model_or_userfile):
+    if isinstance(model_or_userfile, Model):
         data_model = model_or_userfile
         if data_model.G.shape[0] != len(stack_tdec):
             raise ValueError(
@@ -131,7 +114,10 @@ def _resolve_temporal_models(model_or_userfile, stack_tdec, nt_out,
                 (data_model.G.shape[0], len(stack_tdec))
             )
         output_model = _model_at_tdec(data_model, tfit)
-        regMat = _regularization_matrix_from_model_prior(data_model, prior_cov)
+        if isinstance(prior_cov, np.ndarray):
+            regMat = np.linalg.inv(prior_cov)
+        else:
+            regMat = None
         return data_model, output_model, regMat, tfit
 
     if prior_cov:
@@ -190,7 +176,7 @@ def _prediction_sigma(model_spec, Cm):
     return np.sqrt(np.diag(np.dot(G, np.dot(Cm, G.T))))
 
 
-def _iterate_lsqr_arrays(solver, G, d, w, n_iter=5, n_std=3.0):
+def _iterate_lsqr_arrays(solver, G, d, w, n_iter=5, n_std=3.0, predict=None):
     """
     Iterative least squares using only arrays for worker-side execution.
     """
@@ -201,8 +187,9 @@ def _iterate_lsqr_arrays(solver, G, d, w, n_iter=5, n_std=3.0):
         if status == FAIL:
             return status, None, None
 
-        # Compute outliers against the full prediction.
-        misfit = d - np.dot(G, m)
+        # Compute outliers against the selected full prediction.
+        prediction = np.dot(G, m) if predict is None else predict(m)
+        misfit = d - prediction
         std = np.nanstd(misfit)
         outliers = (np.abs(misfit) > (n_std * std)).nonzero()[0]
         if len(outliers) < 1:
@@ -408,6 +395,8 @@ def inversion(stack, userfile, outdir, cleaned_stack=None,
             _invert_pixel_block, blocks, n_proc, data, wgts, solver_cfg, G,
             output_model_spec, n_iter, n_std, cleaned_stack is not None
         )
+
+        # Assemble contiguous worker results in the original pixel order.
         for start, stop, block, clean_data, clean_wgts in block_results:
             for key in _INVERSION_KEYS:
                 results[key][:, start:stop] = block[key]
@@ -440,28 +429,12 @@ def iterate_lsqr(solver, model, G, d, w, n_iter=5, n_std=3.0, n_min=20):
     """
     Iterative least squares to remove outliers.
     """
-    for iternum in range(n_iter):
-    
-        # Fit
-        status, m, Cm = solver.invert(G, d, wgt=w)
-        # Check status
-        if status == FAIL:
-            return status, None, None
-    
-        # Predict
-        pred = model.predict(m)
+    def predict(m):
+        return model.predict(m)['full']
 
-        # Compute outliers
-        misfit = d - pred['full']
-        std = np.nanstd(misfit)
-        outliers = (np.abs(misfit) > (n_std * std)).nonzero()[0]
-        if len(outliers) < 1:
-            break
-        d[outliers] = np.nan
-        w[outliers] = np.nan
-
-    # Done
-    return SUCCESS, m, Cm
+    return _iterate_lsqr_arrays(
+        solver, G, d, w, n_iter=n_iter, n_std=n_std, predict=predict
+    )
 
 def inversion_points(stack, userfile, x, y, solver_type='lsqr',
                      nt_out=200, n_proc=8, regParam=1.0, rw_iter=1, robust=False,
