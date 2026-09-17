@@ -4,6 +4,7 @@ import numpy as np
 import datetime
 import h5py
 
+from ..constants import FAIL
 from ..timeutils import tdec2datestr, datestr2tdec
 from . import timefn
 
@@ -77,15 +78,20 @@ class Model:
 
     def invert(self, solver, d, wgt=None):
         """
-        Perform least squares inversion using a solver.
+        Perform least squares inversion using a solver. Raises RuntimeError if the
+        solver could not estimate a coefficient vector.
         """
 
-        # Do the inversion
+        # Do the inversion over the finite data within the estimation window
         ind = np.isfinite(d) * self.time_mask
         if wgt is None:
-            m, Cm = solver.invert(self.G[ind,:], d[ind])
+            status, m, Cm = solver.invert(self.G[ind,:], d[ind])
         else:
-            m, Cm = solver.invert(self.G[ind,:], d[ind], wgt=wgt[ind])
+            status, m, Cm = solver.invert(self.G[ind,:], d[ind], wgt=wgt[ind])
+
+        # A failed solver returns no coefficients, so stop before unpacking them
+        if status == FAIL:
+            raise RuntimeError('Time series inversion failed.')
 
         # Save the partitions
         self.Cm = Cm

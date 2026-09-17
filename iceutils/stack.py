@@ -726,8 +726,10 @@ class Stack:
         """
         Get the names of the rasters in the Stack.
         """
+        # Reload variables created or written through the HDF5 handle.
+        self._refresh_dataset_if_dirty()
         if 'names' not in self.ds:
-            raise KeyError('names')
+            raise KeyError('Stack has no names variable. Assign to Stack.names to create one.')
         return np.asarray(self.ds['names'].values).astype(str)
 
     @names.setter
@@ -743,10 +745,18 @@ class Stack:
         if values.size != self.Nt:
             raise ValueError('names must have one value per time step.')
 
-        # Replace the existing NetCDF string variable and mark it for refresh.
+        # Write the names as variable-length strings. HDF5 has no fixed-width unicode
+        # type, so the data must be an object array rather than a NumPy unicode array.
+        # h5netcdf cannot delete a variable, so an existing one is overwritten in place;
+        # its length always matches because it is dimensioned on the time coordinate.
+        values = values.astype(object)
         if 'names' in self.fid.variables:
-            del self.fid.variables['names']
-        self.fid.create_variable('names', ('time',), dtype=str, data=values)
+            self.fid['names'][:] = values
+        else:
+            self.fid.create_variable('names', ('time',), dtype=h5py.string_dtype(),
+                                     data=values)
+
+        # Mark the xarray view stale so subsequent reads pick up the new values.
         self.fid.flush()
         self._dirty = True
 

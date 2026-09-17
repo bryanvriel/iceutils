@@ -153,8 +153,9 @@ src_raster = ice.Raster(rasterfile='velocity_latlon.tif')
 trg_raster = ice.Raster(rasterfile='velocity_polar.tif')
 
 # Warp source raster
-ice.warp(src_raster, target_hdr=trg_raster.hdr)
+warped_raster = ice.warp(src_raster, target_hdr=trg_raster.hdr)
 ```
+Note that unlike `Raster.resample`, which modifies a raster in place, `ice.warp` leaves the source raster untouched and returns a new `Raster` on the target grid. The return value must be captured.
 We can also pre-construct the target coordinates in memory and create a `RasterInfo` object on the fly:
 
 ```python
@@ -167,7 +168,7 @@ X, Y = np.meshgrid(x, y)
 trg_hdr = ice.RasterInfo(X=X, Y=Y, epsg=3413)
 
 # Warp source raster
-ice.warp(src_raster, target_hdr=trg_hdr)
+warped_raster = ice.warp(src_raster, target_hdr=trg_hdr)
 ```
 
 ### Converting between projection and image coordinates
