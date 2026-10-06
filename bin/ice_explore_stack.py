@@ -132,6 +132,9 @@ def main(args):
     cbar = plt.colorbar(im, ax=ax, pad=0.02)
     cbar.set_label(args.key)
 
+    # Marker showing the most recent click location (empty until first click)
+    marker, = ax.plot([], [], '*', color='C0', ms=10, mec='k', mew=1)
+
     # Initialize plot for time series for a given pixel
     pts, axts = plt.subplots(figsize=(10,6))
 
@@ -168,6 +171,10 @@ def main(args):
         axts.set_ylabel(args.key)
         axts.legend(loc='best')
 
+        # Move the marker to the new click location
+        marker.set_data([x], [y])
+
+        fig.canvas.draw()
         pts.canvas.draw()
 
     cid = fig.canvas.mpl_connect('button_press_event', printcoords)
