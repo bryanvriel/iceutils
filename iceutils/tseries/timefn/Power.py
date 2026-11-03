@@ -65,6 +65,24 @@ class Power(CenteredBasisFn):
         '''
         return  np.power(self.normalizedTime(tinput)/self.tau, self.exponent)
 
+    def _integrate_raw(self, t, t_end):
+        if not np.isfinite(self.exponent) or self.exponent < 0 or self.exponent % 1:
+            raise NotImplementedError(
+                "Integration requires a nonnegative integer Power."
+            )
+
+        # Factor the power difference to retain precision for short intervals.
+        power = int(self.exponent)
+        x = self.normalizedTime(t) / self.tau
+        y = self.normalizedTime(t_end) / self.tau
+        difference = np.array(
+            [(end - start).total_seconds() for start, end in zip(t, t_end)]
+        )
+        terms = np.zeros_like(x)
+        for k in range(power + 1):
+            terms += y ** (power - k) * x**k
+        return difference * terms / (power + 1)
+
     def kwrepr(self):
         '''Keyword representation.
         '''

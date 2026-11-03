@@ -6,6 +6,10 @@
 
 Time-dependent rasters can be stored in a stack object in order to perform time series analysis and visualization of raster changes. Time series methods are based on the regularized least squares approaches outlined in "Riel, B., Minchew, B., & Joughin, I. (2021). Observing traveling waves in glaciers with remote sensing: new flexible time series methods and application to Sermeq Kujalleq (Jakobshavn Isbræ), Greenland. _The Cryosphere_."
 
+Temporal models support instantaneous samples, interval integrals and averages,
+and endpoint differences; see [temporal observation operators](doc/temporal_observation_operators.md)
+for fitting, prediction, units, and regularization examples.
+
 ## Installation and package structure
 
 Prior to installing `iceutils`, we'll need to install a number of Python dependencies.

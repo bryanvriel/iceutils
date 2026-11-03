@@ -113,6 +113,15 @@ class BasisFn(object):
         '''
         return self.compute(tinput)
 
+    def _integrate(self, t, t_end, seconds_per_unit):
+        """Integrate validated intervals, clipping to this function's active range."""
+        start = np.maximum(t, self.tmin)
+        end = np.maximum(start, np.minimum(t_end, self.tmax))
+        return self._integrate_raw(start, end) / seconds_per_unit
+
+    def _integrate_raw(self, t, t_end):
+        """Integrate the unmasked basis with respect to elapsed seconds."""
+        raise NotImplementedError("Integration is not supported for %s." % self.fnname)
 
     def __repr__(self):
         '''String representation of basis function.

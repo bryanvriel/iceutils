@@ -108,6 +108,11 @@ def _resolve_temporal_models(model_or_userfile, stack_tdec, nt_out,
 
     if isinstance(model_or_userfile, Model):
         data_model = model_or_userfile
+        if data_model.observation != "sample":
+            raise ValueError(
+                "Stack inversion does not support interval Models; "
+                "use Model.invert() or a matrix solver directly."
+            )
         if data_model.G.shape[0] != len(stack_tdec):
             raise ValueError(
                 'Input model has %d epochs, but stack has %d time steps.' %

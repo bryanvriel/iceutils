@@ -71,6 +71,22 @@ class Trigonometry(CenteredBasisFn):
         '''
         return self.fnpointer( self.radfactor * self.normalizedTime(tinput)/ self.period) 
 
+    def _integrate_raw(self, t, t_end):
+        if self.fnname not in ("Cos", "Sin"):
+            return super()._integrate_raw(t, t_end)
+
+        # Midpoint phase and sinc attenuation avoid subtracting nearby harmonics.
+        duration = np.array(
+            [(end - start).total_seconds() for start, end in zip(t, t_end)]
+        )
+        phase = self.radfactor * self.normalizedTime(t) / self.period
+        phase_span = self.radfactor * duration / (self.norm * self.period)
+        return (
+            duration
+            * np.sinc(phase_span / (2 * np.pi))
+            * self.fnpointer(phase + phase_span / 2)
+        )
+
     def kwrepr(self):
         '''Keyword representation.
         '''
