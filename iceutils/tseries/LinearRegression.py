@@ -27,11 +27,14 @@ def select_solver(solver_type, reg_indices=None, rw_iter=1, regMat=None, robust=
     rw_iter: int, optional
         Number of re-weighting iterations for Lasso solver. Default: 1.
     regMat: ndarray, optional
-        Extra prior covariance matrix. Default: None.
+        Parameter precision/penalty matrix, not a covariance. For ridge this
+        replaces the diagonal penalty. Default: None.
     robust: bool, optional
         Use RANSAC regressor for lsqr solver. Default: False.
     penalty: float, optional
-        Regularization penalty for lasso and ridge solvers. Default: 1.0.
+        Regularization penalty for lasso and ridge solvers. Ridge adds this
+        value directly to selected normal-matrix diagonal entries (it is not
+        squared). No automatic scaling with observation duration. Default: 1.0.
     n_nonzero_coefs: int, optional
         Number of non-zero regularized elements for omp solver. Default: 10.
     n_min: int, optional

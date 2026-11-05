@@ -6,6 +6,15 @@
 
 Time-dependent rasters can be stored in a stack object in order to perform time series analysis and visualization of raster changes. Time series methods are based on the regularized least squares approaches outlined in "Riel, B., Minchew, B., & Joughin, I. (2021). Observing traveling waves in glaciers with remote sensing: new flexible time series methods and application to Sermeq Kujalleq (Jakobshavn Isbræ), Greenland. _The Cryosphere_."
 
+Temporal models support instantaneous samples, interval integrals and averages,
+and endpoint differences; see [temporal observation operators](doc/temporal_observation_operators.md)
+for fitting, prediction, units, and regularization examples.
+
+Stack inversions now use the model's regularization indices, including B-splines,
+rather than all transient terms. Existing B-spline fits and uncertainties can
+change; see [stack inversion compatibility](doc/temporal_observation_operators.md#stack-inversion-compatibility)
+for the affected solvers and prior settings.
+
 ## Installation and package structure
 
 Prior to installing `iceutils`, we'll need to install a number of Python dependencies.
@@ -153,8 +162,9 @@ src_raster = ice.Raster(rasterfile='velocity_latlon.tif')
 trg_raster = ice.Raster(rasterfile='velocity_polar.tif')
 
 # Warp source raster
-ice.warp(src_raster, target_hdr=trg_raster.hdr)
+warped_raster = ice.warp(src_raster, target_hdr=trg_raster.hdr)
 ```
+Note that unlike `Raster.resample`, which modifies a raster in place, `ice.warp` leaves the source raster untouched and returns a new `Raster` on the target grid. The return value must be captured.
 We can also pre-construct the target coordinates in memory and create a `RasterInfo` object on the fly:
 
 ```python
@@ -167,7 +177,7 @@ X, Y = np.meshgrid(x, y)
 trg_hdr = ice.RasterInfo(X=X, Y=Y, epsg=3413)
 
 # Warp source raster
-ice.warp(src_raster, target_hdr=trg_hdr)
+warped_raster = ice.warp(src_raster, target_hdr=trg_hdr)
 ```
 
 ### Converting between projection and image coordinates
@@ -234,6 +244,16 @@ raster_array = stack['data'].isel(time=index).values
 raster_array = stack['data'].sel(time='2014-06-01', method='nearest').values
 ```
 In the above example, we access stack variables through xarray `DataArray` objects. This exposes named-axis indexing, reductions, coordinate-aware selection, and methods such as `differentiate`.
+
+Legacy simulation stacks can also use plain numeric time. If a legacy `tdec` or
+`time` dataset has `units="days"`, `Stack` keeps those values as numeric days.
+For files without unit metadata, pass an override when opening:
+
+```python
+stack = ice.Stack("simulation_stack.h5", time_units="days")
+print(stack.tdec)       # raw simulation days
+print(stack.time_units) # "days"
+```
 
 ### Loading NetCDF stacks
 

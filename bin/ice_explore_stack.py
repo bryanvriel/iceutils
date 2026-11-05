@@ -11,24 +11,9 @@ import sys
 import os
 
 import iceutils as ice
+from iceutils._cli import parse_indexer
 
 plt.rc('font', size=12)
-
-def parse_indexer(value):
-    try:
-        dim, index = value.split('=', 1)
-    except ValueError:
-        raise argparse.ArgumentTypeError('Indexers must use DIM=INDEX syntax.')
-    if not dim:
-        raise argparse.ArgumentTypeError('Indexer dimension cannot be empty.')
-    try:
-        index = int(index)
-    except ValueError:
-        raise argparse.ArgumentTypeError('Indexer value must be an integer.')
-    return dim, index
-
-def indexer_dict(values):
-    return dict(values or [])
 
 def parse():
     parser = argparse.ArgumentParser(description="""
@@ -74,7 +59,7 @@ def main(args):
 
     # Load the stack
     stack = ice.Stack(args.stackfile, ds_hdr=args.key, time_key=args.time_key,
-                      indexers=indexer_dict(args.isel))
+                      indexers=dict(args.isel))
 
     # Get frame
     if args.frame == 'initial':
@@ -106,13 +91,13 @@ def main(args):
         tlabel = 'Index'
     else:
         tdec = stack.tdec
-        tlabel = 'Year'
+        tlabel = 'Year' if stack.time_is_calendar else (stack.time_units or 'Time')
     
     # If model directory is given, load model stack (full fit)
     mstack = None
     if args.mfile is not None:
         mstack = ice.Stack(args.mfile, ds_hdr=args.mkey,
-                           indexers=indexer_dict(args.misel))
+                           indexers=dict(args.misel))
         # Load correct time array
         if args.mtdec != 'tdec':
             mtdec = mstack[args.mtdec].values
@@ -146,6 +131,9 @@ def main(args):
                    extent=extent, alpha=args.alpha)
     cbar = plt.colorbar(im, ax=ax, pad=0.02)
     cbar.set_label(args.key)
+
+    # Marker showing the most recent click location (empty until first click)
+    marker, = ax.plot([], [], '*', color='C0', ms=10, mec='k', mew=1)
 
     # Initialize plot for time series for a given pixel
     pts, axts = plt.subplots(figsize=(10,6))
@@ -183,6 +171,10 @@ def main(args):
         axts.set_ylabel(args.key)
         axts.legend(loc='best')
 
+        # Move the marker to the new click location
+        marker.set_data([x], [y])
+
+        fig.canvas.draw()
         pts.canvas.draw()
 
     cid = fig.canvas.mpl_connect('button_press_event', printcoords)

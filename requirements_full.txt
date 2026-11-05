@@ -12,3 +12,4 @@ opencv
 scikit-learn
 pint
 cvxopt
+joblib

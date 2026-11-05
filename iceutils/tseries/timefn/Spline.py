@@ -9,10 +9,29 @@
 
 from .CenteredBasisFn import CenteredBasisFn
 import numpy as np 
+from scipy.interpolate import BSpline as ScipyBSpline
 try:
     from scipy.misc import factorial, comb
 except ImportError:
     from scipy.special import factorial, comb
+
+
+def _spline_integral(basis, t, t_end, integrated=False):
+    """Integrate a cardinal spline, including the integrated spline's plateau."""
+    right = basis.order + 1
+    spline = ScipyBSpline.basis_element(np.arange(right + 1), extrapolate=False)
+    primitive = spline.antiderivative(2 if integrated else 1)
+    x = basis.normalizedTime(t) / basis.scale + right / 2
+    y = basis.normalizedTime(t_end) / basis.scale + right / 2
+
+    # Outside compact support, the first primitive is constant and the second
+    # is linear. Clipping also avoids polynomial cancellation in distant tails.
+    values = primitive(np.clip(y, 0, right)) - primitive(np.clip(x, 0, right))
+    if integrated:
+        values += np.maximum(y - right, 0) - np.maximum(x - right, 0)
+        return values * basis.norm * basis.scale**2
+    return values * basis.norm * basis.scale
+
 
 class BSpline(CenteredBasisFn):
     '''Class to represent a Bspline.
@@ -83,6 +102,9 @@ class BSpline(CenteredBasisFn):
 
         b = b / (1.0*factorial(self.order))
         return b
+
+    def _integrate_raw(self, t, t_end):
+        return _spline_integral(self, t, t_end)
 
     def kwrepr(self):
         '''Keyword representation.
@@ -167,6 +189,9 @@ class ISpline(CenteredBasisFn):
         b = b * self.scale /( (self.order+1.0) * factorial(self.order))
         return b
 
+    def _integrate_raw(self, t, t_end):
+        return _spline_integral(self, t, t_end, integrated=True)
+
     def kwrepr(self):
         '''Keyword representation.
         '''
@@ -241,6 +266,9 @@ class PBSpline(BSpline):
         if self.offset >= self.period:
             raise ValueError('Offset {0} cannot exceed the time period {1} for Periodic BSplines'.format(self.offset, self.period))
 
+
+    def _integrate_raw(self, t, t_end):
+        raise NotImplementedError("Integration is not supported for PBSpline.")
 
     def normalizedTime(self, tinput):
         '''Extending the CenteredBasisFn method to account for offset and period.

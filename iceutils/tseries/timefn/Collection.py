@@ -9,6 +9,7 @@
 from .BasisFn import BasisFn
 import copy
 import numpy as np
+from .observations import _normalize_observations, _seconds_per_unit
 
 class TimefnCollection(object):
     '''Class to represent a collection of time functions.
@@ -130,6 +131,45 @@ class TimefnCollection(object):
             return result.flatten()
 
         return result
+
+    def design_matrix(self, t, observation="sample", t_end=None, time_units="years"):
+        """Evaluate a fixed basis through a temporal observation operator.
+
+        Parameters
+        ----------
+        t : array_like
+            Epochs, or interval starts, as naive dates/datetimes, NumPy datetimes,
+            or decimal years. Scalars produce one row.
+        observation : {'sample', 'integral', 'average', 'difference'}, optional
+            Sample the basis, integrate it, average it over an interval, or
+            subtract its endpoint values. Default: 'sample'.
+        t_end : array_like, optional
+            Interval ends matching t exactly. Required except for samples.
+        time_units : str, optional
+            Elapsed-time units for integrals and durations. Default: 'years'
+            (365.25 days), independent of each basis function's time units.
+
+        Returns
+        -------
+        G : (N, P) numpy.ndarray
+            Observation matrix, with unchanged basis column ordering. Averages
+            use the full duration, including time outside active support.
+        """
+        dates, ends, durations = _normalize_observations(
+            t, observation, t_end, time_units
+        )
+        G = np.zeros((len(dates), len(self)))
+        seconds = _seconds_per_unit(time_units)
+        for index, basis in enumerate(self.data):
+            if observation == "sample":
+                G[:, index] = basis(dates)
+            elif observation == "difference":
+                G[:, index] = basis(ends) - basis(dates)
+            else:
+                G[:, index] = basis._integrate(dates, ends, seconds)
+        if observation == "average":
+            G /= durations[:, None]
+        return G
 
     def __repr__(self):
         '''Represent the collection as a string.

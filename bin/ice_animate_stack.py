@@ -8,6 +8,14 @@ import numpy as np
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 import iceutils as ice
+from iceutils._cli import parse_indexer
+
+def time_label(stack, index):
+    value = stack.tdec[index]
+    if stack.time_is_calendar:
+        return ice.tdec2datestr(value)
+    units = stack.time_units or 'time units'
+    return '%g %s' % (value, units)
 
 def parse():
     """ Parse command line args for script """
@@ -34,6 +42,9 @@ def parse():
         help='Aspect of figure. Default: equal.')
     parser.add_argument('-fps', '--fps', action='store', type=int, default=5, 
         help='Frames per second for the animation. Default: 5.')
+    parser.add_argument('-isel', action='append', type=parse_indexer, default=[],
+        metavar='DIM=INDEX',
+        help='Select an extra stack dimension by zero-based index.')
     parser.add_argument('-k', '-key', '--key', action='store', type=str, default='data', 
         help='Dataset to view. Default: data.')
     parser.add_argument('-r', '-ref', '--ref', action='store', type=str, default=None,
@@ -54,7 +65,7 @@ def parse():
 
 def main(args):
     # Load Stack
-    stack = ice.Stack(args.stackfile)
+    stack = ice.Stack(args.stackfile, indexers=dict(args.isel))
     
     # Load reference SAR image
     if args.ref is not None:
@@ -94,7 +105,7 @@ def main(args):
     ax.set_aspect(aspect)
 
     # Create title
-    datestr = ice.tdec2datestr(stack.tdec[0])
+    datestr = time_label(stack, 0)
     tx = ax.set_title(args.title + ' ' + datestr, fontweight='bold')
 
     ax.set_xlabel(args.xlabel)
@@ -109,7 +120,7 @@ def main(args):
     # Update the frame
     def animate(i):
         im.set_data(data.isel(time=i).values - data_ref)
-        datestr = ice.tdec2datestr(stack.tdec[i])
+        datestr = time_label(stack, i)
         tx.set_text(args.title + ' ' + datestr)
 
     fig.set_tight_layout(True)

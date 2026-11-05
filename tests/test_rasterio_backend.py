@@ -20,7 +20,9 @@ from rasterio.warp import calculate_default_transform, reproject
 os.environ.setdefault("MPLCONFIGDIR", os.path.join(tempfile.gettempdir(), "iceutils-mpl"))
 
 from iceutils.raster import Raster, RasterInfo, warp, write_gdal
+from iceutils._cli import parse_indexer
 from iceutils.stack import Stack, TIME_UNITS
+import iceutils.stack as stack_module
 
 
 def _write_geotiff(path, data, transform=None, crs="EPSG:3413", nodata=None):
@@ -93,6 +95,32 @@ def _solver_module():
     except ImportError as err:
         pytest.skip("optional time-series solver dependencies unavailable: %s" % err)
     return solver
+
+
+def _write_linear_user_model(path):
+    path.write_text(
+        "\n".join(
+            [
+                "import numpy as np",
+                "from iceutils.tseries import timefn",
+                "",
+                "def build(dates, **kwargs):",
+                "    collection = timefn.TimefnCollection()",
+                "    collection.append(timefn.fnmap['poly'](tref=dates[0], order=1, units='years'))",
+                "    return collection",
+                "",
+                "def computeCm(collection, **kwargs):",
+                "    return np.eye(len(collection), dtype=float)",
+                "",
+            ]
+        )
+    )
+    return str(path)
+
+
+def _read_stack_variable(path, key="data"):
+    with Stack(str(path)) as stack:
+        return np.asarray(stack[key].values).copy()
 
 
 def _xarray_storage_type_names(data_array):
@@ -346,6 +374,337 @@ def test_stack_writes_xarray_format_with_unix_second_time_encoding(tmp_path):
         assert deriv.dims == ("time", "y", "x")
 
 
+def test_stack_writes_fractional_second_times_as_float_seconds(tmp_path):
+    path = tmp_path / "stack_fractional_time.h5"
+    hdr = RasterInfo(
+        transform=Affine(2.0, 0.0, 10.0, 0.0, -3.0, 20.0),
+        crs=CRS.from_epsg(3413),
+        shape=(2, 3),
+    )
+    tdec = np.array([2020.0409836065573, 2024.872950819672])
+
+    with Stack(str(path), mode="w") as stack:
+        stack.initialize(tdec, hdr, data=False)
+        assert stack.ds["time"].sizes["time"] == 2
+
+    with h5py.File(path, "r") as fid:
+        units = fid["time"].attrs["units"]
+        if isinstance(units, bytes):
+            units = units.decode("utf-8")
+        assert units == TIME_UNITS
+        assert fid["time"].dtype.kind == "f"
+
+    with Stack(str(path)) as stack:
+        assert np.allclose(stack.tdec, tdec)
+
+
+@pytest.mark.parametrize("reopen, time_units", [(False, None), (True, None), (True, TIME_UNITS)])
+def test_stack_xarray_export_preserves_calendar_time_and_data(tmp_path, reopen, time_units):
+    path = tmp_path / "source.h5"
+    exported = tmp_path / "exported.nc"
+    tdec = np.array([2020.0409836065573, 2024.872950819672])
+    data = np.arange(12, dtype=np.float32).reshape(2, 2, 3)
+
+    stack = Stack(str(path), mode="w", init_tdec=tdec, init_rasterinfo=_stack_hdr((2, 3)))
+    try:
+        stack.create_dataset("data", data.shape, data=data)
+        if reopen:
+            stack.close()
+            stack = Stack(str(path), time_units=time_units)
+        expected_time = stack.ds["time"].values.copy()
+        stack.ds.to_netcdf(exported, engine="h5netcdf")
+    finally:
+        stack.close()
+
+    with Stack(str(exported)) as result:
+        assert np.array_equal(result.ds["time"].values, expected_time)
+        assert np.array_equal(result["data"].values, data)
+        assert np.allclose(result.tdec, tdec)
+        # xarray may omit midnight from the serialized epoch string.
+        assert result.time_units.startswith("seconds since 1970-01-01")
+        assert result.hdr == _stack_hdr((2, 3))
+
+
+@pytest.mark.parametrize("units", ["decimal years", "days since 2001-03-01", "days"])
+def test_stack_xarray_export_preserves_legacy_time_and_data(tmp_path, units):
+    path = tmp_path / "legacy.h5"
+    exported = tmp_path / "exported.nc"
+    if units == "decimal years":
+        time = np.array([2020.0, 2020.5, 2021.0])
+    else:
+        time = np.array([0., 2.5, 10.])
+    data = np.arange(18, dtype=np.float32).reshape(3, 2, 3)
+
+    with h5py.File(path, "w") as fid:
+        fid.attrs["format"] = "NHW"
+        fid.attrs["EPSG"] = 3413
+        fid["x"] = np.array([10., 12., 14.])
+        fid["y"] = np.array([20., 17.])
+        fid["tdec"] = time
+        fid["tdec"].attrs["units"] = units
+        fid["data"] = data
+
+    with Stack(str(path)) as stack:
+        expected_time = stack.ds["time"].values.copy()
+        expected_tdec = stack.tdec.copy()
+        stack.ds.to_netcdf(exported, engine="h5netcdf")
+
+    with Stack(str(exported)) as result:
+        assert np.array_equal(result.ds["time"].values, expected_time)
+        assert np.allclose(result.tdec, expected_tdec)
+        assert np.array_equal(result["data"].values, data)
+        assert result.hdr.epsg == 3413
+        if units == "days":
+            assert not result.time_is_calendar
+            assert result.time_units == "days"
+
+
+def test_stack_writes_are_visible_through_xarray_access(tmp_path):
+    path = tmp_path / "stack_write_visibility.h5"
+    data = np.arange(12, dtype=np.float32).reshape(2, 2, 3)
+
+    with Stack(str(path), mode="w") as stack:
+        stack.initialize(np.array([2020.0, 2021.0]), _stack_hdr((2, 3)))
+        stack.create_dataset("data", data.shape, dtype=data.dtype)
+        stack.set_slice(0, data[0])
+        stack.set_slice(1, data[1])
+
+        assert np.array_equal(stack["data"].values, data)
+
+        stack.create_dataset("chunk_data", data.shape, dtype=data.dtype)
+        stack.set_chunk(slice(None), slice(None), data, key="chunk_data")
+        assert np.array_equal(stack["chunk_data"].values, data)
+
+
+def test_stack_preserves_non_epoch_calendar_time_units(tmp_path):
+    path = tmp_path / "legacy_calendar_days.h5"
+    days = np.array([0.0, 2.5, 10.0])
+    expected = np.array(
+        ["2001-03-01", "2001-03-03T12:00:00", "2001-03-11"],
+        dtype="datetime64[ns]",
+    )
+
+    with h5py.File(path, "w") as fid:
+        fid.attrs["format"] = "NHW"
+        fid["x"] = np.array([10.0, 12.0, 14.0])
+        fid["y"] = np.array([20.0, 17.0])
+        time = fid.create_dataset("tdec", data=days)
+        time.attrs["units"] = "days since 2001-03-01 00:00:00"
+        fid["data"] = np.zeros((days.size, 2, 3), dtype=np.float32)
+
+    with Stack(str(path)) as stack:
+        assert stack.time_is_calendar
+        assert stack.time_units == "days since 2001-03-01 00:00:00"
+        assert np.array_equal(stack.ds["time"].values, expected)
+
+
+def test_stack_recognizes_decimal_year_unit_alias(tmp_path):
+    path = tmp_path / "legacy_decimal_year_alias.h5"
+    tdec = np.array([2020.0, 2020.5, 2021.0])
+
+    with h5py.File(path, "w") as fid:
+        fid.attrs["format"] = "NHW"
+        fid["x"] = np.array([10.0, 12.0, 14.0])
+        fid["y"] = np.array([20.0, 17.0])
+        time = fid.create_dataset("tdec", data=tdec)
+        time.attrs["units"] = "decimal years"
+        fid["data"] = np.zeros((tdec.size, 2, 3), dtype=np.float32)
+
+    with Stack(str(path)) as stack:
+        assert stack.time_units == "decimal_year"
+        assert np.allclose(stack.tdec, tdec)
+
+
+def test_stack_canonical_metadata_error_does_not_fall_back_to_legacy(tmp_path, monkeypatch):
+    path = tmp_path / "canonical_bad_time_units.nc"
+    ds = xr.Dataset(
+        data_vars={"data": (("time", "y", "x"), np.zeros((2, 2, 3)))},
+        coords={
+            "time": ("time", np.array([0.0, 1.0])),
+            "y": ("y", np.array([20.0, 17.0])),
+            "x": ("x", np.array([10.0, 12.0, 14.0])),
+        },
+    )
+    ds.to_netcdf(path, engine="h5netcdf")
+    ds.close()
+
+    legacy_calls = []
+
+    def load_legacy(*args, **kwargs):
+        legacy_calls.append((args, kwargs))
+
+    monkeypatch.setattr(Stack, "_load_legacy_hdf5", load_legacy)
+
+    with pytest.raises(ValueError, match="Unsupported calendar time unit"):
+        Stack(str(path), time_units="fortnights since 2000-01-01")
+
+    assert not legacy_calls
+
+
+def test_stack_missing_file_propagates_io_error(tmp_path):
+    with pytest.raises(OSError):
+        Stack(str(tmp_path / "missing_stack.h5"))
+
+
+def test_stack_closes_canonical_dataset_when_initialization_fails(tmp_path, monkeypatch):
+    path = tmp_path / "canonical_close_failure.nc"
+    ds = xr.Dataset(
+        coords={
+            "time": ("time", np.array(["2020-01-01"], dtype="datetime64[ns]")),
+            "y": ("y", np.array([20.0, 17.0])),
+            "x": ("x", np.array([10.0, 12.0, 14.0])),
+        },
+    )
+    ds.to_netcdf(path, engine="h5netcdf")
+    ds.close()
+
+    opened = xr.open_dataset(path, engine="h5netcdf", decode_times=True)
+    closed = []
+
+    class TrackedDataset:
+        def __init__(self, dataset):
+            self.dataset = dataset
+
+        @property
+        def sizes(self):
+            return self.dataset.sizes
+
+        def __getitem__(self, key):
+            return self.dataset[key]
+
+        def __getattr__(self, name):
+            return getattr(self.dataset, name)
+
+        def close(self):
+            closed.append(True)
+            self.dataset.close()
+
+    def fail_header(ds):
+        raise RuntimeError("invalid canonical metadata")
+
+    monkeypatch.setattr(
+        stack_module.xr, "open_dataset", lambda *args, **kwargs: TrackedDataset(opened)
+    )
+    monkeypatch.setattr(Stack, "_rasterinfo_from_dataset", staticmethod(fail_header))
+
+    with pytest.raises(RuntimeError, match="invalid canonical metadata"):
+        Stack(str(path))
+
+    assert closed == [True]
+
+
+def test_stack_reads_legacy_nanosecond_time_values_with_second_units(tmp_path):
+    path = tmp_path / "stack_legacy_nanosecond_time.h5"
+    times = np.array(
+        [
+            "2020-01-15T23:59:59.999998976",
+            "2020-02-14T23:59:59.999997184",
+            "2020-03-16T00:00:00.000002560",
+        ],
+        dtype="datetime64[ns]",
+    )
+    epoch = np.datetime64("1970-01-01T00:00:00", "ns")
+    nanoseconds = (times - epoch).astype("timedelta64[ns]").astype(np.int64)
+
+    with h5py.File(path, "w") as fid:
+        fid.attrs["format"] = "xarray"
+        fid.attrs["EPSG"] = 3413
+        time = fid.create_dataset("time", data=nanoseconds)
+        time.attrs["units"] = TIME_UNITS
+        time.attrs["calendar"] = "proleptic_gregorian"
+        fid.create_dataset("y", data=np.array([20.0, 17.0]))
+        fid.create_dataset("x", data=np.array([10.0, 12.0, 14.0]))
+        fid.create_dataset("data", data=np.zeros((times.size, 2, 3), dtype=np.float32))
+
+    with Stack(str(path)) as stack:
+        assert np.array_equal(stack.ds["time"].values.astype("datetime64[ns]"), times)
+        assert np.ptp(stack.tdec) > 0.0
+
+
+def test_stack_reads_legacy_tdec_with_plain_day_units_as_numeric_time(tmp_path):
+    path = tmp_path / "legacy_days.h5"
+    days = np.array([0.0, 5.0, 12.5])
+    data = np.arange(18, dtype=np.float32).reshape(3, 2, 3)
+    with h5py.File(path, "w") as fid:
+        fid.attrs["format"] = "NHW"
+        fid.attrs["EPSG"] = 3413
+        fid["x"] = np.array([10.0, 12.0, 14.0])
+        fid["y"] = np.array([20.0, 17.0])
+        tdec = fid.create_dataset("tdec", data=days)
+        tdec.attrs["units"] = "days"
+        fid["data"] = data
+
+    with Stack(str(path)) as stack:
+        assert not stack.time_is_calendar
+        assert stack.time_units == "days"
+        assert stack.ds["time"].dtype.kind in ("f", "i", "u")
+        assert np.allclose(stack.tdec, days)
+        assert stack.time_to_index(t=6.0) == 1
+        with pytest.raises(ValueError):
+            stack.time_to_index(date="2020-01-01")
+        assert np.array_equal(stack.slice(1), data[1])
+        assert np.array_equal(stack.get_chunk(slice(0, 2), slice(1, 3)), data[:, :, 1:3])
+        assert np.array_equal(stack.timeseries(coord=(1, 2)), data[:, 1, 2])
+        assert np.array_equal(stack.mean(), data.mean(axis=0))
+
+
+def test_stack_reads_unannotated_legacy_tdec_as_decimal_years(tmp_path):
+    path = tmp_path / "legacy_decimal_years.h5"
+    tdec = np.array([2020.0, 2020.5, 2021.0])
+    with h5py.File(path, "w") as fid:
+        fid.attrs["format"] = "NHW"
+        fid["x"] = np.array([10.0, 12.0, 14.0])
+        fid["y"] = np.array([20.0, 17.0])
+        fid["tdec"] = tdec
+        fid["data"] = np.zeros((3, 2, 3), dtype=np.float32)
+
+    with Stack(str(path)) as stack:
+        assert stack.time_is_calendar
+        assert stack.time_units == "decimal_year"
+        assert np.allclose(stack.tdec, tdec)
+        assert stack.time_to_index(date="2020-07-01") == 1
+
+
+def test_stack_time_units_override_reads_legacy_tdec_as_numeric_time(tmp_path):
+    path = tmp_path / "legacy_days_without_units.h5"
+    days = np.array([0.0, 10.0, 20.0])
+    with h5py.File(path, "w") as fid:
+        fid.attrs["format"] = "NHW"
+        fid["x"] = np.array([10.0, 12.0, 14.0])
+        fid["y"] = np.array([20.0, 17.0])
+        fid["tdec"] = days
+        fid["data"] = np.zeros((3, 2, 3), dtype=np.float32)
+
+    with Stack(str(path), time_units="days") as stack:
+        assert not stack.time_is_calendar
+        assert stack.time_units == "days"
+        assert np.allclose(stack.tdec, days)
+        assert stack.time_to_index(t=12.0) == 1
+
+
+def test_stack_reads_netcdf_plain_day_time_as_numeric_time(tmp_path):
+    path = tmp_path / "numeric_day_stack.nc"
+    days = np.array([0.0, 2.0, 4.0])
+    data = np.arange(18, dtype=np.float32).reshape(3, 2, 3)
+    ds = xr.Dataset(
+        data_vars={"data": (("time", "y", "x"), data)},
+        coords={
+            "time": ("time", days, {"units": "days"}),
+            "y": ("y", np.array([20.0, 17.0])),
+            "x": ("x", np.array([10.0, 12.0, 14.0])),
+        },
+        attrs={"EPSG": 3413},
+    )
+    ds.to_netcdf(path, engine="h5netcdf")
+    ds.close()
+
+    with Stack(str(path)) as stack:
+        assert not stack.time_is_calendar
+        assert stack.time_units == "days"
+        assert np.allclose(stack.tdec, days)
+        assert np.array_equal(stack.timeseries(coord=(1, 2)), data[:, 1, 2])
+
+
 def test_stack_indexers_select_extra_netcdf_dimensions(tmp_path):
     path = tmp_path / "multiband_stack.nc"
     data = np.arange(2 * 3 * 4 * 5, dtype=np.float32).reshape(2, 3, 4, 5)
@@ -409,6 +768,30 @@ def test_stack_reads_legacy_nhw_hdf5_as_canonical_xarray(tmp_path):
         assert np.array_equal(stack.slice(0), data[0])
         assert np.array_equal(stack.get_chunk(slice(0, 2), slice(1, 3)), data[:, :, 1:3])
         assert np.array_equal(stack.timeseries(coord=(1, 2)), data[:, 1, 2])
+
+
+def test_stack_reads_irregular_legacy_3d_metadata_with_private_dims(tmp_path):
+    path = tmp_path / "legacy_irregular_3d.h5"
+    data = np.arange(12, dtype=np.float32).reshape(2, 2, 3)
+    transect_coordinates = np.arange(12, dtype=np.float64).reshape(3, 2, 2)
+    with h5py.File(path, "w") as fid:
+        fid["x"] = np.array([10.0, 12.0, 14.0])
+        fid["y"] = np.array([20.0, 17.0])
+        fid["tdec"] = np.array([2020.0, 2021.0])
+        fid["data"] = data
+        fid["transect_coordinates"] = transect_coordinates
+        fid.attrs["format"] = "NHW"
+
+    with Stack(str(path)) as stack:
+        assert stack["data"].dims == ("time", "y", "x")
+        assert stack["transect_coordinates"].dims == (
+            "transect_coordinates_dim_0",
+            "transect_coordinates_dim_1",
+            "transect_coordinates_dim_2",
+        )
+        assert np.array_equal(
+            stack["transect_coordinates"].values, transect_coordinates
+        )
 
 
 def test_stack_reads_legacy_hwn_hdf5_as_canonical_xarray(tmp_path):
@@ -497,6 +880,243 @@ def test_solver_chunk_flattening_reads_legacy_hwn_as_canonical(tmp_path):
     assert np.array_equal(wgts1d, expected_weights[:, expected_mask])
 
 
+def test_solver_inversion_joblib_matches_serial_with_cleaned_stack(tmp_path):
+    solver = _solver_module()
+    userfile = _write_linear_user_model(tmp_path / "linear_model.py")
+    stack_path = tmp_path / "invert_stack.h5"
+    serial_dir = tmp_path / "serial"
+    parallel_dir = tmp_path / "parallel"
+    serial_dir.mkdir()
+    parallel_dir.mkdir()
+
+    time = np.arange(6, dtype=np.float32)[:, None, None]
+    rows, cols = np.indices((2, 3), dtype=np.float32)
+    data = 1.0 + 0.25 * time + 0.5 * rows + 0.1 * cols
+    data = data.astype(np.float32)
+    data[3, 1, 2] += 5.0
+    _write_stack(stack_path, data)
+
+    with Stack(str(stack_path)) as stack:
+        solver.inversion(
+            stack,
+            userfile,
+            str(serial_dir),
+            cleaned_stack="cleaned.h5",
+            solver_type="lsqr",
+            nt_out=5,
+            n_proc=1,
+            n_min=2,
+            n_iter=2,
+            n_std=1.5,
+            no_weights=True,
+            prior_cov=False,
+        )
+
+    with Stack(str(stack_path)) as stack:
+        solver.inversion(
+            stack,
+            userfile,
+            str(parallel_dir),
+            cleaned_stack="cleaned.h5",
+            solver_type="lsqr",
+            nt_out=5,
+            n_proc=2,
+            n_min=2,
+            n_iter=2,
+            n_std=1.5,
+            no_weights=True,
+            prior_cov=False,
+        )
+
+    for key in ("full", "secular", "seasonal", "transient", "sigma"):
+        serial = _read_stack_variable(serial_dir / ("interp_output_%s.h5" % key))
+        parallel = _read_stack_variable(parallel_dir / ("interp_output_%s.h5" % key))
+        np.testing.assert_allclose(parallel, serial, equal_nan=True)
+
+    for key in ("data", "weights"):
+        serial = _read_stack_variable(serial_dir / "cleaned.h5", key=key)
+        parallel = _read_stack_variable(parallel_dir / "cleaned.h5", key=key)
+        np.testing.assert_allclose(parallel, serial, equal_nan=True)
+
+
+def test_solver_inversion_accepts_model_instance(tmp_path):
+    solver = _solver_module()
+    userfile = _write_linear_user_model(tmp_path / "linear_model.py")
+    stack_path = tmp_path / "model_stack.h5"
+    file_dir = tmp_path / "file_model"
+    instance_dir = tmp_path / "instance_model"
+    file_dir.mkdir()
+    instance_dir.mkdir()
+
+    time = np.arange(6, dtype=np.float32)[:, None, None]
+    rows, cols = np.indices((2, 3), dtype=np.float32)
+    data = 1.5 + 0.4 * time + 0.25 * rows + 0.05 * cols
+    _write_stack(stack_path, data.astype(np.float32))
+
+    with Stack(str(stack_path)) as stack:
+        solver.inversion(
+            stack,
+            userfile,
+            str(file_dir),
+            solver_type="lsqr",
+            nt_out=5,
+            n_proc=1,
+            n_min=2,
+            no_weights=True,
+        )
+
+    with Stack(str(stack_path)) as stack:
+        model = solver.build_temporal_model(
+            stack.tdec, poly=1, periods=[], isplines=[], bsplines=[]
+        )
+        solver.inversion(
+            stack,
+            model,
+            str(instance_dir),
+            solver_type="lsqr",
+            nt_out=5,
+            n_proc=1,
+            n_min=2,
+            no_weights=True,
+        )
+
+    for key in ("full", "secular", "seasonal", "transient", "sigma"):
+        from_file = _read_stack_variable(file_dir / ("interp_output_%s.h5" % key))
+        from_instance = _read_stack_variable(instance_dir / ("interp_output_%s.h5" % key))
+        np.testing.assert_allclose(from_instance, from_file, equal_nan=True)
+
+
+def test_solver_uses_model_regularization_indices_for_bsplines():
+    solver = _solver_module()
+    tdec = np.linspace(2020.0, 2021.0, 8)
+    model = solver.build_temporal_model(
+        tdec, poly=1, bsplines=[4], isplines=[4], periods=[]
+    )
+
+    reg_indices = solver._regularization_indices(model)
+
+    assert len(model.reg_indices) > len(model.itransient)
+    assert np.array_equal(reg_indices, model.reg_indices)
+
+
+def test_iterate_lsqr_uses_public_model_prediction_for_outliers():
+    solver = _solver_module()
+    G = np.eye(3)
+
+    class DummySolver:
+        def invert(self, G, d, wgt):
+            return solver.SUCCESS, np.array([0.0, 0.0, 10.0]), np.eye(3)
+
+    class OffsetModel:
+        def predict(self, m):
+            return {"full": np.zeros(3)}
+
+    d = np.array([0.0, 0.0, 10.0])
+    w = np.ones(3)
+    status, m, Cm = solver.iterate_lsqr(
+        DummySolver(), OffsetModel(), G, d, w, n_iter=1, n_std=1.0
+    )
+
+    assert status == solver.SUCCESS
+    assert np.array_equal(m, np.array([0.0, 0.0, 10.0]))
+    assert np.array_equal(Cm, np.eye(3))
+    assert np.isnan(d[2])
+    assert np.isnan(w[2])
+
+
+def test_iterate_lsqr_array_path_preserves_failure_and_matrix_prediction():
+    solver = _solver_module()
+    G = np.eye(3)
+
+    class FailingSolver:
+        def invert(self, G, d, wgt):
+            return solver.FAIL, None, None
+
+    d = np.array([0.0, 0.0, 10.0])
+    w = np.ones(3)
+    status, m, Cm = solver._iterate_lsqr_arrays(FailingSolver(), G, d, w)
+    assert status == solver.FAIL
+    assert m is None
+    assert Cm is None
+    assert np.array_equal(d, np.array([0.0, 0.0, 10.0]))
+    assert np.array_equal(w, np.ones(3))
+
+    class MatrixSolver:
+        def invert(self, G, d, wgt):
+            return solver.SUCCESS, np.array([0.0, 0.0, 10.0]), np.eye(3)
+
+    status, m, Cm = solver._iterate_lsqr_arrays(MatrixSolver(), G, d, w, n_iter=1)
+    assert status == solver.SUCCESS
+    assert np.array_equal(m, np.array([0.0, 0.0, 10.0]))
+    assert np.array_equal(Cm, np.eye(3))
+    assert np.array_equal(d, np.array([0.0, 0.0, 10.0]))
+    assert np.array_equal(w, np.ones(3))
+
+
+def test_solver_inversion_points_joblib_matches_serial(tmp_path):
+    solver = _solver_module()
+    userfile = _write_linear_user_model(tmp_path / "linear_model.py")
+    stack_path = tmp_path / "points_stack.h5"
+
+    time = np.arange(6, dtype=np.float32)[:, None, None]
+    rows, cols = np.indices((2, 3), dtype=np.float32)
+    data = 2.0 + 0.5 * time + rows + 0.2 * cols
+    weights = np.ones_like(data, dtype=np.float32)
+    _write_stack(stack_path, data.astype(np.float32), weights=weights)
+
+    hdr = _stack_hdr((2, 3))
+    x0, y0 = hdr.imagecoord_to_xy(0, 0)
+    x1, y1 = hdr.imagecoord_to_xy(1, 2)
+
+    with Stack(str(stack_path)) as stack:
+        serial = solver.inversion_points(
+            stack, userfile, [x0, x1], [y0, y1],
+            solver_type="lsqr", nt_out=5, n_proc=1, n_min=2,
+        )
+
+    with Stack(str(stack_path)) as stack:
+        parallel = solver.inversion_points(
+            stack, userfile, [x0, x1], [y0, y1],
+            solver_type="lsqr", nt_out=5, n_proc=2, n_min=2,
+        )
+
+    for key in ("tdec", "full", "secular", "seasonal", "transient", "sigma"):
+        np.testing.assert_allclose(parallel[key], serial[key], equal_nan=True)
+
+
+def test_solver_butterworth_joblib_matches_serial(tmp_path):
+    solver = _solver_module()
+    stack_path = tmp_path / "butter_stack.h5"
+    serial_long = tmp_path / "serial_long.h5"
+    serial_short = tmp_path / "serial_short.h5"
+    parallel_long = tmp_path / "parallel_long.h5"
+    parallel_short = tmp_path / "parallel_short.h5"
+
+    time = np.linspace(0.0, 4.0 * np.pi, 24, dtype=np.float32)[:, None, None]
+    rows, cols = np.indices((2, 3), dtype=np.float32)
+    data = np.sin(time) + 0.1 * np.cos(4.0 * time) + 0.25 * rows + 0.1 * cols
+    _write_stack(stack_path, data.astype(np.float32))
+
+    b, a = solver.butterworth_coeffs(frequency=0.2, dt=1.0, order=1)
+
+    with Stack(str(stack_path)) as stack:
+        solver.butterworth(stack, a, b, str(serial_long), str(serial_short), n_proc=1)
+
+    with Stack(str(stack_path)) as stack:
+        solver.butterworth(stack, a, b, str(parallel_long), str(parallel_short), n_proc=2)
+
+    np.testing.assert_allclose(
+        _read_stack_variable(parallel_long),
+        _read_stack_variable(serial_long),
+        rtol=1.0e-6,
+    )
+    np.testing.assert_allclose(
+        _read_stack_variable(parallel_short),
+        _read_stack_variable(serial_short),
+        rtol=1.0e-6,
+    )
+
+
 @pytest.mark.parametrize(
     "source_key, include_weights",
     [
@@ -548,37 +1168,52 @@ def test_ice_resample_detects_netcdf_stack_inputs():
     assert not module._is_stack_file("velocity_stack.tif")
 
 
-def test_ice_explore_stack_parses_extra_dimension_indexers():
-    module = _load_bin_script("ice_explore_stack.py")
+def test_parse_indexer_accepts_negative_indices_and_rejects_invalid_values():
+    assert parse_indexer("band=-1") == ("band", -1)
+    assert parse_indexer("component=12") == ("component", 12)
 
-    assert module.parse_indexer("band=0") == ("band", 0)
-    assert module.parse_indexer("component=12") == ("component", 12)
-    assert module.indexer_dict([("band", 1), ("component", 2)]) == {
-        "band": 1,
-        "component": 2,
-    }
-
-    with pytest.raises(argparse.ArgumentTypeError):
-        module.parse_indexer("band")
-    with pytest.raises(argparse.ArgumentTypeError):
-        module.parse_indexer("=0")
-    with pytest.raises(argparse.ArgumentTypeError):
-        module.parse_indexer("band=first")
+    for value in ("band", "=0", "band=first"):
+        with pytest.raises(argparse.ArgumentTypeError):
+            parse_indexer(value)
 
 
-def test_ice_view_stack_mean_parses_extra_dimension_indexers():
-    module = _load_bin_script("ice_view_stack_mean.py")
+@pytest.mark.parametrize(
+    "script, extra_args, expected_model_indexers",
+    [
+        ("ice_animate_stack.py", [], None),
+        ("ice_view_stack_mean.py", [], None),
+        ("ice_explore_stack.py", ["-misel", "model=-1"], [("model", -1)]),
+    ],
+)
+def test_viewer_scripts_parse_and_pass_shared_dimension_indexers(
+    monkeypatch, script, extra_args, expected_model_indexers
+):
+    module = _load_bin_script(script)
+    monkeypatch.setattr(sys, "argv", [script, "input.h5"])
+    defaults = module.parse()
+    assert defaults.isel == []
+    if expected_model_indexers is not None:
+        assert defaults.misel == []
 
-    assert module.parse_indexer("band=0") == ("band", 0)
-    assert module.parse_indexer("component=12") == ("component", 12)
-    assert module.indexer_dict([("band", 1), ("component", 2)]) == {
-        "band": 1,
-        "component": 2,
-    }
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [script, "input.h5", "-isel", "band=-1", "-isel", "band=2"] + extra_args,
+    )
+    args = module.parse()
 
-    with pytest.raises(argparse.ArgumentTypeError):
-        module.parse_indexer("band")
-    with pytest.raises(argparse.ArgumentTypeError):
-        module.parse_indexer("=0")
-    with pytest.raises(argparse.ArgumentTypeError):
-        module.parse_indexer("band=first")
+    assert args.isel == [("band", -1), ("band", 2)]
+    if expected_model_indexers is not None:
+        assert args.misel == expected_model_indexers
+
+    captured = {}
+
+    def stop_stack(*args, **kwargs):
+        captured["indexers"] = kwargs["indexers"]
+        raise RuntimeError("stop after stack setup")
+
+    monkeypatch.setattr(module.ice, "Stack", stop_stack)
+    with pytest.raises(RuntimeError, match="stop after stack setup"):
+        module.main(args)
+
+    assert captured["indexers"] == {"band": 2}

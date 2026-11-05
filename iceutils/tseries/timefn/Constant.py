@@ -8,6 +8,7 @@
 
 
 from .BasisFn import BasisFn
+import numpy as np
 
 
 class Constant(BasisFn):
@@ -47,3 +48,5 @@ class Constant(BasisFn):
         '''
         return 1.0
 
+    def _integrate_raw(self, t, t_end):
+        return np.array([(end - start).total_seconds() for start, end in zip(t, t_end)])
