@@ -398,6 +398,67 @@ def test_stack_writes_fractional_second_times_as_float_seconds(tmp_path):
         assert np.allclose(stack.tdec, tdec)
 
 
+@pytest.mark.parametrize("reopen, time_units", [(False, None), (True, None), (True, TIME_UNITS)])
+def test_stack_xarray_export_preserves_calendar_time_and_data(tmp_path, reopen, time_units):
+    path = tmp_path / "source.h5"
+    exported = tmp_path / "exported.nc"
+    tdec = np.array([2020.0409836065573, 2024.872950819672])
+    data = np.arange(12, dtype=np.float32).reshape(2, 2, 3)
+
+    stack = Stack(str(path), mode="w", init_tdec=tdec, init_rasterinfo=_stack_hdr((2, 3)))
+    try:
+        stack.create_dataset("data", data.shape, data=data)
+        if reopen:
+            stack.close()
+            stack = Stack(str(path), time_units=time_units)
+        expected_time = stack.ds["time"].values.copy()
+        stack.ds.to_netcdf(exported, engine="h5netcdf")
+    finally:
+        stack.close()
+
+    with Stack(str(exported)) as result:
+        assert np.array_equal(result.ds["time"].values, expected_time)
+        assert np.array_equal(result["data"].values, data)
+        assert np.allclose(result.tdec, tdec)
+        # xarray may omit midnight from the serialized epoch string.
+        assert result.time_units.startswith("seconds since 1970-01-01")
+        assert result.hdr == _stack_hdr((2, 3))
+
+
+@pytest.mark.parametrize("units", ["decimal years", "days since 2001-03-01", "days"])
+def test_stack_xarray_export_preserves_legacy_time_and_data(tmp_path, units):
+    path = tmp_path / "legacy.h5"
+    exported = tmp_path / "exported.nc"
+    if units == "decimal years":
+        time = np.array([2020.0, 2020.5, 2021.0])
+    else:
+        time = np.array([0., 2.5, 10.])
+    data = np.arange(18, dtype=np.float32).reshape(3, 2, 3)
+
+    with h5py.File(path, "w") as fid:
+        fid.attrs["format"] = "NHW"
+        fid.attrs["EPSG"] = 3413
+        fid["x"] = np.array([10., 12., 14.])
+        fid["y"] = np.array([20., 17.])
+        fid["tdec"] = time
+        fid["tdec"].attrs["units"] = units
+        fid["data"] = data
+
+    with Stack(str(path)) as stack:
+        expected_time = stack.ds["time"].values.copy()
+        expected_tdec = stack.tdec.copy()
+        stack.ds.to_netcdf(exported, engine="h5netcdf")
+
+    with Stack(str(exported)) as result:
+        assert np.array_equal(result.ds["time"].values, expected_time)
+        assert np.allclose(result.tdec, expected_tdec)
+        assert np.array_equal(result["data"].values, data)
+        assert result.hdr.epsg == 3413
+        if units == "days":
+            assert not result.time_is_calendar
+            assert result.time_units == "days"
+
+
 def test_stack_writes_are_visible_through_xarray_access(tmp_path):
     path = tmp_path / "stack_write_visibility.h5"
     data = np.arange(12, dtype=np.float32).reshape(2, 2, 3)

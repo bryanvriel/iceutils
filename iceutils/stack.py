@@ -262,9 +262,14 @@ class Stack:
             time, units = _time_values_to_coordinate(ds['time'].values, units=units)
             ds = ds.assign_coords(time=('time', time))
 
-        # Keep coordinate and dataset metadata in agreement.
+        # Datetime units belong in xarray's encoding, not its attributes.
         if units is not None:
-            ds['time'].attrs['units'] = units
+            if np.issubdtype(ds['time'].dtype, np.datetime64):
+                ds['time'].attrs.pop('units', None)
+                if _is_calendar_units(units):
+                    ds['time'].encoding['units'] = units
+            else:
+                ds['time'].attrs['units'] = units
             ds.attrs['time_units'] = units
         return ds
 
@@ -389,6 +394,7 @@ class Stack:
 
             # Construct canonical metadata once all source datasets are known.
             ds = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
+            ds = self._normalize_dataset_time(ds)
             hdr = self._rasterinfo_from_dataset(ds)
         except Exception:
             if raw_ds is not None:

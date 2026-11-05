@@ -10,6 +10,11 @@ Temporal models support instantaneous samples, interval integrals and averages,
 and endpoint differences; see [temporal observation operators](doc/temporal_observation_operators.md)
 for fitting, prediction, units, and regularization examples.
 
+Stack inversions now use the model's regularization indices, including B-splines,
+rather than all transient terms. Existing B-spline fits and uncertainties can
+change; see [stack inversion compatibility](doc/temporal_observation_operators.md#stack-inversion-compatibility)
+for the affected solvers and prior settings.
+
 ## Installation and package structure
 
 Prior to installing `iceutils`, we'll need to install a number of Python dependencies.

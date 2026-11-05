@@ -192,6 +192,38 @@ Custom solver objects retain their existing delegation behavior and supply their
 own identifiability policy. Existing sparse solver objectives and uncertainty
 approximations are unchanged by this feature.
 
+## Stack inversion compatibility
+
+`inversion()` and `inversion_points()` now select penalized columns from
+`model.reg_indices` when it is nonempty, falling back to `model.itransient`
+otherwise. Previously, stack inversion always selected `model.itransient`.
+The built-in model partitions mark both B-splines and integrated B-splines for
+regularization; ordinary B-splines belong to the seasonal partition and were
+therefore excluded from the previous selection.
+
+This changes existing results in the following cases, even for the default
+`sample` observation operator:
+
+- Ridge without an explicit prior precision matrix now penalizes B-splines.
+  The fitted coefficients, component predictions, and uncertainty can change
+  for the same data, basis, and `regParam`.
+- Lasso now includes B-splines in its sparse penalty, including when a prior
+  precision matrix is also supplied.
+- A mixed model containing splines and logarithmic transient terms now selects
+  the spline regularization indices; logarithmic terms are no longer penalized
+  merely because they belong to the transient partition.
+
+For ridge with an explicit precision matrix (`prior_cov=True` with a userfile
+that defines `computeCm()`), that matrix still replaces the diagonal penalty,
+so the index selection does not change its penalty. Least squares and OMP do
+not use this index selection. Models containing only polynomial, harmonic,
+step, and integrated B-spline terms retain the same penalized columns.
+
+When upgrading an existing B-spline or mixed transient analysis, compare fits
+and uncertainties and reconsider `regParam` before replacing published or
+archived results. A direct matrix solver still accepts an explicit
+`reg_indices` selection when reproducing an earlier penalty is necessary.
+
 ## Mixed observations and correlated errors
 
 Each Model stores one observation kind. Mixed fits can concatenate matrices from
